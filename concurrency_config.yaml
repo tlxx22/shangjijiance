@@ -1,0 +1,13 @@
+# 并发处理配置
+# 修改此文件来控制并发行为
+
+concurrency:
+  enabled: true              # 是否启用并发模式 (false 则使用串行模式)
+  max_workers: 5            # 最大并发 Worker 数
+  timeout_per_site: 1800    # 每个网站超时时间(秒)，超时后跳过
+
+browser:
+  headless: true            # 无头模式（服务器部署设为 true）
+
+logging:
+  worker_log_dir: "worker_logs"  # Worker 日志子目录名称

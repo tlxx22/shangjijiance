@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(C:/Users/yaowu/miniconda3/envs/shangji/python.exe:*)"
+    ]
+  }
+}

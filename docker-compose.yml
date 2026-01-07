@@ -1,0 +1,19 @@
+# 商机监测 SSE API 服务
+
+services:
+  api:
+    build: .
+    container_name: shangjijiance-api
+    init: true # 正确处理僵尸进程
+    ports:
+      - "8000:8000"
+    environment:
+      - BROWSER_USE_API_KEY=${BROWSER_USE_API_KEY}
+      - WORKERS=5
+    volumes:
+      - ./output:/app/output
+      - ./prompts:/app/prompts
+      - ./sites_config.yaml:/app/sites_config.yaml:ro
+      - ./concurrency_config.yaml:/app/concurrency_config.yaml:ro
+    shm_size: 2g
+    restart: unless-stopped

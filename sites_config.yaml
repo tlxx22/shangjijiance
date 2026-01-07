@@ -1,0 +1,311 @@
+# 商机监测智能体 - 网站配置文件
+# 根据这个模板配置您要监控的招投标网站
+
+websites:
+  # # ===== 示例网站1：河北省招标投标公共服务平台 =====
+  # - name: "河北省招标投标公共服务平台"
+  #   url: "https://szj.hebei.gov.cn/zbtbfwpt/tender/xxgk/jjlist.do"
+  #   login_required: false
+
+  # # ===== 示例网站2：河南省平顶山市 =====
+  # - name: "河南省平顶山市"
+  #   url: "http://ggzy.pds.gov.cn/zfcg/index.jhtml"
+  #   login_required: false
+  # # ===== 示例网站2：河南省平顶山市 =====
+  
+  # # ===== 示例网站3：黑龙江阳光采购服务平台 =====
+  # - name: "黑龙江阳光采购服务平台"
+  #   url: "https://hljygcg.ejy365.com/EJY/InquiryProject?firTypeName=%e9%a6%96%e9%a1%b5&secTypeName=%e9%87%87%e8%b4%ad%e5%85%ac%e5%91%8a&secID=10001&firID=0&HeadId=2	"
+  #   login_required: false
+    
+  # # ===== 示例网站4：四川省公共资源交易信息网 =====
+  # - name: "四川省公共资源交易信息网"
+  #   url: "https://ggzyjy.sc.gov.cn/jyxx/002001/transactionInfo.html	"
+  #   login_required: false
+    
+  # # ===== 示例网站5：大唐电子商务平台 =====
+  # - name: "大唐电子商务平台"
+  #   url: "https://www.cdt-ec.com/notice/moreController/toMore?globleType=0"
+  #   login_required: false
+    
+  # # ===== 示例网站6：鄂尔多斯市公共资源交易中心 =====
+  # - name: "鄂尔多斯市公共资源交易中心"
+  #   url: "http://www.ordosggzyjy.org.cn/TPFront/jsgc/009001/?categorynum=009001"
+  #   login_required: false
+    
+  # # ===== 示例网站7：黑龙江省政府采购网 =====
+  # - name: "黑龙江省政府采购网"
+  #   url: "https://hljcg.hlj.gov.cn/maincms-web/noticeInformationHlj"
+  #   login_required: false
+    
+  # # ===== 示例网站8：青岛市公共资源交易电子服务系统 =====
+  # - name: "青岛市公共资源交易电子服务系统"
+  #   url: "https://ggzy.qingdao.gov.cn/Tradeinfo-GGGSList/1-1-2"
+  #   login_required: false
+
+  # # ===== 示例网站9：中国政府采购网 =====
+  # - name: "中国政府采购网"
+  #   url: "http://www.ccgp.gov.cn/cggg/zygg/"
+  #   # login_required: true
+  #   # username: "shanghai_user"
+  #   # password: "shanghai_pass"
+
+# 配置说明：
+# - name: 网站名称（必填）
+# - url: 网站列表页URL（必填）
+# - login_required: 是否需要登录（必填，true或false）
+# - username: 登录用户名（login_required为true时必填）
+# - password: 登录密码（login_required为true时必填）
+#
+# 注意事项：
+# 1. 请确保URL是招标列表页，不是网站首页
+# 2. 账号密码将用于自动登录
+# 3. 添加新网站时，复制上面的模板并修改对应信息
+# 4. 删除示例配置后添加您真实的网站信息
+
+
+# # ===== 序号1 =====
+#   - name: "国家电力投资集团招投标平台"
+#     url: "https://ebid.espic.com.cn"
+#     login_required: false
+
+# # ===== 序号2 =====
+#   - name: "国投集团标投标交易平台"
+#     url: "https://www.sdicc.com.cn/"
+#     login_required: false
+
+# # ===== 序号3 =====
+#   - name: "采招网-中信集团"
+#     url: "https://www.bidcenter.com.cn/"
+#     login_required: false
+
+# # ===== 序号4 =====
+#   - name: "全国公共资源交易平台"
+#     url: "https://www.ggzy.gov.cn/"
+#     login_required: false
+
+# # ===== 序号5 =====
+#   - name: "中国铁路装备招采平台"
+#     url: "https://www.crecgec.com/"
+#     login_required: true
+#     username: "duxuanhan22"
+#     password: "Tlxx66@@"
+
+
+# # ===== 序号1 =====
+#   - name: "中交集团-交融网标投标交易平台"
+#     url: "https://sp.iccec.cn/searchList?type=98/"
+#     login_required: false
+
+# # ===== 序号2 =====
+#   - name: "中建材电子商务平台"
+#     url: "https://c.cnbm.com.cn/cnbm-portal-view/#/login"
+#     login_required: true
+#     username: ""
+#     password: ""
+
+# # ===== 序号3 ===== 
+# # 使用非标准div元素链接, agent无法点击
+#   - name: "中国石油招投标网"
+#     url: "https://www.cnpcbidding.com/#/tenders"
+#     login_required: false
+
+# # ===== 序号4 =====
+#   - name: "中石化电子招投标平台"
+#     url: "https://bidding.epec.com/tenderInfoOne?key=1"
+#     login_required: false
+
+# # ===== 序号5 =====
+#   - name: "国家能源集团标投标交易平台"
+#     url: "http://www.chnenergybidding.com.cn/bidweb/001/001002/moreinfo.html"
+#     login_required: false
+
+# # ===== 序号6 =====
+#   - name: "中国化学电子招标投标交易平台"
+#     url: "https://bid.cncecyc.com/cms/channel/ywgg1hw/index.htm"
+#     login_required: false
+
+# # ===== 序号7 =====
+#   - name: "中煤集团招投标平台"
+#     url: "http://www.zmzb.com/cms/channel/ywgg1gc/index.htm"
+#     login_required: false
+
+# # ===== 序号8 =====
+#   - name: "中国铁建招投标平台"
+#     url: "https://www.crccep.cn/findNoticesList?index=BiddingAnnouncement&type=MAT"
+#     login_required: false
+
+# # ===== 序号9 =====
+#   - name: "中国铁路装备招采平台"
+#     url: "https://eproport.crecgec.com/#/notice/notice?noticeType=1"
+#     login_required: false
+
+# # ===== 序号10 =====
+#   - name: "五矿集团招投标平台"
+#     url: "https://ec.minmetals.com.cn/open/home/purchase-info?tabIndex=0"
+#     login_required: false
+
+# ===== 序号11 =====
+  - name: "中色股份招投标平台"
+    url: "https://ecp.cnmc.com.cn/"
+    login_required: false
+
+# ===== 序号12 =====
+  - name: "中国海油供应链数字化平台"
+    url: "https://bid.cnooc.com.cn/home/#/newsAlertList?index=0&childrenActive=0&label=%E6%8B%9B%E6%A0%87%E9%87%87%E8%B4%AD"
+    login_required: false
+
+# ===== 序号13 =====
+  - name: "中铝集团绿星链通招投标平台"
+    url: "https://zb.chinalco.com.cn/"
+    login_required: false
+
+# # ===== 序号14 =====
+#   - name: "兵器工业集团招投标平台"
+#     url: "https://bid.norincogroup-ebuy.com/retrieve.do"
+#     login_required: false
+
+# ===== 序号15 =====
+  - name: "安能招投标平台"
+    url: "https://cgpt.china-an.cn/"
+    login_required: false
+
+# ===== 序号16 =====
+  - name: "中国煤科电子采购平台"
+    url: "http://cg.ccteg.cn/cms/index.htm"
+    login_required: false
+
+# ===== 序号17 =====
+  - name: "中国电力招标网"
+    url: "https://bid.powerchina.cn/index"
+    login_required: false
+
+# ===== 序号18 =====
+  - name: "中国能建招标投标交易平台"
+    url: "https://ec.ceec.net.cn"
+    login_required: false
+
+# # ===== 序号19 =====
+#   - name: "中国核工业集团招投标平台"
+#     url: "https://one.cnncecp.com/"
+#     login_required: false
+
+# # ===== 序号16 =====
+#   - name: "中国煤科电子采购平台"
+#     url: "http://cg.ccteg.cn/cms/index.htm"
+#     login_required: false
+
+# ===== 序号17 =====
+  - name: "中国电力招标网"
+    url: "https://bid.powerchina.cn/index"
+    login_required: false
+
+# ===== 序号18 =====
+  - name: "中国能建招标投标交易平台"
+    url: "https://ec.ceec.net.cn"
+    login_required: false
+
+# ===== 序号19 =====
+  - name: "中国核工业集团招投标平台"
+    url: "https://one.cnncecp.com/"
+    login_required: false
+
+# ===== 序号20 =====
+  - name: "三峡集团招投标平台"
+    url: "https://sdwf.dlzb.com/"
+    login_required: false
+
+# ===== 序号21 =====
+  - name: "国家电网集团标投标交易平台"
+    url: "https://ecp.sgcc.com.cn/ecp2.0/portal/#/"
+    login_required: false
+
+# ===== 序号22 =====
+  - name: "华能集团招标网"
+    url: "https://ec.chng.com.cn/"
+    login_required: false
+
+# ===== 序号23 =====
+  - name: "中国华电集团电子商务平台"
+    url: "https://www.chdtp.com/"
+    login_required: false
+
+# ===== 序号24 =====
+  - name: "中建云筑网"
+    url: "https://www.yzw.cn/"
+    login_required: false
+
+# ===== 序号25 =====
+  - name: "保利集团招投标平台"
+    url: "https://ec.polycd.com/portal/list?chnlcode=tender"
+    login_required: false
+
+# ===== 序号26 =====
+  - name: "国机集团电子采购平台"
+    url: "https://epp.sinomach.com.cn/"
+    login_required: false
+
+# ===== 序号27 =====
+  - name: "通用技术-中心采购平台"
+    url: "https://cg.gt.cn"
+    login_required: false
+
+# ===== 序号28 =====
+  - name: "东方电气采购平台"
+    url: "https://nsrm.dongfang.com/"
+    login_required: false
+
+# ===== 序号29 =====
+  - name: "中国黄金集团招投标平台"
+    url: "https://jzcg.chinagoldgroup.com"
+    login_required: false
+
+# ===== 序号30 =====
+  - name: "航天电子采购平台"
+    url: "https://bd.ispacechina.com/index.do?f=1"
+    login_required: false
+
+# # # ===== 序号31 =====
+# #   - name: "采招网-中信集团"
+# #     url: "https://www.bidcenter.com.cn/newssearchyz-121312136.html"
+# #     login_required: false
+
+# # # ===== 序号32 =====
+# #   - name: "中国节能电子商务平台"
+# #     url: "https://www.ebidding.cecep.cn/"
+# #     login_required: false
+
+# # # ===== 序号33 =====
+# #   - name: "中广核电子商务平台"
+# #     url: "http://ecp.cgnpc.com.cn/"
+# #     login_required: false
+
+# # # ===== 序号34 =====
+# #   - name: "大唐电子商务平台"
+# #     url: "http://www.cdt-ec.com/notice/moreController/toMore?globleType=0"
+# #     login_required: false
+
+# # # ===== 序号35 =====
+# #   - name: "华润守正采购交易平台"
+# #     url: "https://szecp.com.cn/"
+# #     login_required: false
+
+# # # ===== 序号36 =====
+# #   - name: "建设招标网-中国南水北调集团招标采购"
+# #     url: "https://www.jszhaobiao.cn/s17537/"
+# #     login_required: false
+
+# # # ===== 序号37 =====
+# #   - name: "航天科工集中采购平台"
+# #     url: "https://www.e-casic.com/"
+# #     login_required: false
+
+# # # ===== 序号38 =====
+# #   - name: "采招网-中国宝武钢铁集团有限公司集团"
+# #     url: "https://www.bidcenter.com.cn/newssearchyz-154907495.html"
+# #     login_required: false
+
+# # # ===== 序号39 =====
+# #   - name: "电力能源招标网-国家管网电子招标平台"
+# #     url: "https://pipechina.dlnyzb.com/?bd_vid=9243166450573447612"
+# #     login_required: false

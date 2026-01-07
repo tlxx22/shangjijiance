@@ -1,0 +1,67 @@
+%% ============================================
+%% 二期项目完整数据流转图 (AI Agent架构)
+%% ============================================
+flowchart TB
+    subgraph 入口["启动入口"]
+        START["main.py 启动<br/>加载 sites_config.yaml"]
+    end
+
+    subgraph 网站["招投标网站"]
+        WEB["目标网站"]
+    end
+
+    subgraph LLM层["AI决策核心"]
+        LLM["大语言模型<br/>(ChatBrowserUse)"]
+    end
+
+    subgraph 风控层["风控检测"]
+        RISK["风控/验证码检测<br/>贯穿全流程"]
+    end
+
+    subgraph Agent["AI Agent 处理层"]
+        LOGIN["登录处理<br/>(如需要)"]
+        FILTER["执行筛选<br/>日期/类型"]
+        SCAN["扫描列表页<br/>AI理解标题含义"]
+        DECIDE{"符合条件?"}
+        CLICK["点击进入详情页"]
+        DETAIL["详情页处理<br/>展开信息 + 截图"]
+        EXTRACT["AI提取字段"]
+        BACK["关闭标签页<br/>返回列表"]
+        NEXT["翻页继续"]
+    end
+
+    subgraph 存储["数据存储层"]
+        OUTPUT["输出文件<br/>PNG截图 + JSON元数据"]
+    end
+
+    %% 主流程
+    START -->|"遍历网站列表"| LOGIN
+    LOGIN --> FILTER
+    FILTER -->|"打开浏览器"| WEB
+    WEB -->|"返回页面"| SCAN
+
+    SCAN --> DECIDE
+    DECIDE -->|"符合"| CLICK
+    DECIDE -->|"不符合/处理完"| NEXT
+
+    CLICK --> DETAIL
+    DETAIL --> EXTRACT
+    EXTRACT --> OUTPUT
+    EXTRACT --> BACK
+    BACK --> SCAN
+
+    NEXT -->|"还有下一页"| WEB
+    NEXT -->|"全部完成"| END["任务结束"]
+
+    %% LLM双向连接Agent层
+    LLM <-->|"页面内容/任务指令<br/>↔<br/>决策结果"| Agent
+
+    %% 风控双向连接Agent层
+    RISK <-->|"流程中自动检测<br/>↔<br/>触发后若无法解决则跳过"| Agent
+
+    %% 样式
+    style LLM fill:#FFD700
+    style RISK fill:#FF6B6B
+    style EXTRACT fill:#FFD700
+    style DETAIL fill:#90EE90
+    style OUTPUT fill:#87CEEB

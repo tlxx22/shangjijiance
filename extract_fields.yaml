@@ -1,0 +1,69 @@
+# 详情页字段提取配置
+# 定义需要从详情页中提取的字段
+# 修改此文件即可增删字段，无需改动代码
+
+fields:
+  # ===== 基本信息 =====
+  - key: projectname
+    name: 项目名称
+    hint: 招标或者采购项目名称
+
+  - key: projectId
+    name: 项目编号
+    hint: 可能的名称有项目编号、公告编号、招标编号、合同编号、项目编码、询价单编号、竞价编号、采购公告编号等
+
+  - key: budget
+    name: 预算金额
+    hint: 数字，以元为单位。如果是万元需要转换为元
+
+  - key: bidamount
+    name: 中标金额
+    hint: 数字，以元为单位。如果是中标候选人公告，则返回排名第一的候选人的报价
+
+  - key: bidopentime
+    name: 开标日期
+    hint: 格式 YYYY-MM-DD
+
+  # ===== 地区信息 =====
+  - key: area
+    name: 省份
+    hint: 招标单位或招标地址的省份，如果无法获取，使用项目所在地省份(包括直辖市)
+
+  - key: city
+    name: 城市
+    hint: 招标单位或招标地址的城市，如果无法获取，使用项目所在地城市(包括直辖市)
+
+  - key: district
+    name: 县区
+    hint: 招标单位或招标地址的区县，如果无法获取，使用项目所在地区县
+
+  # ===== 采购单位信息 =====
+  - key: buyer
+    name: 采购单位
+    hint: 招标单位或者采购单位名称
+
+  - key: buyerperson
+    name: 采购单位联系人
+    hint: 采购单位的联系人姓名
+
+  - key: buyertel
+    name: 采购单位联系电话
+    hint: 采购单位的联系电话
+
+  # ===== 代理机构信息 =====
+  - key: agency
+    name: 招标代理机构
+    hint: 招标代理机构名称
+
+  # ===== 中标信息 =====
+  - key: winner
+    name: 中标单位
+    hint: 中标公告返回中标单位名称，如果是中标候选人公告，则返回排名第一的候选人的名称
+
+  - key: winnerperson
+    name: 中标单位联系人
+    hint: 中标单位的联系人姓名
+
+  - key: winnertel
+    name: 中标单位联系电话
+    hint: 中标单位的联系电话
