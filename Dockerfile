@@ -4,7 +4,7 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-# 安装 Chromium 运行所需的系统依赖
+# 安装 Chromium 运行所需的系统依赖 + 中文字体
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     libatk-bridge2.0-0 \
@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 \
     libxkbcommon0 \
     fonts-liberation \
+    fonts-noto-cjk \
     xvfb \
     curl \
     && rm -rf /var/lib/apt/lists/*

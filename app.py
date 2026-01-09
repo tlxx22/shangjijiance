@@ -35,8 +35,42 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# 自定义验证错误处理：返回 400 而不是 422
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """将 Pydantic 验证错误从 422 改为 400"""
+    return JSONResponse(
+        status_code=400,
+        content={"detail": exc.errors()}
+    )
+
 # 进程内互斥锁：每个 worker 进程独立
 crawl_lock = asyncio.Lock()
+
+
+class CrawlStreamingResponse(StreamingResponse):
+    """
+    带锁释放兜底的 StreamingResponse
+    
+    解决问题：如果客户端在响应头发送阶段断线，generator 可能不会执行，
+    导致锁永远不释放。此类在 __call__ 的 finally 中兜底释放锁。
+    
+    断线机制说明：uvicorn/starlette (ASGI spec>=2.4) 主要通过 send() 失败
+    (OSError -> ClientDisconnect) 检测断线，而非 CancelledError。
+    """
+    def __init__(self, content, lock: asyncio.Lock, **kwargs):
+        super().__init__(content, **kwargs)
+        self._lock = lock
+    
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # 唯一锁释放点：响应生命周期结束时释放
+            self._lock.release()
 
 
 @app.get("/health")
@@ -53,7 +87,7 @@ async def crawl(request: CrawlRequest, http_request: Request):
     返回 SSE 流，事件类型：
     - start: 开始爬取
     - item: 每保存一条详情（逐条输出）
-    - heartbeat: 每30秒心跳
+    - heartbeat: 每30秒无输出发出心跳
     - done: 爬取完成
     - error: 出错
     """
@@ -81,13 +115,15 @@ async def crawl(request: CrawlRequest, http_request: Request):
             password=request.site.password,
         )
         
-        # 渲染 prompt
+        # 渲染 prompt（传入今天日期用于兜底规则）
+        from datetime import date
         filter_prompt = render_prompt(
             template,
             category=request.category,
             site_name=request.site.name,
             date_start=str(request.date_start),
             date_end=str(request.date_end),
+            today=str(date.today()),
         )
         
         # 创建 session（还不启动）
@@ -95,30 +131,27 @@ async def crawl(request: CrawlRequest, http_request: Request):
         
         # session.start() 放到 wrapped() 里，确保爬虫只在流开始时启动
         async def wrapped():
-            try:
-                session.start(
-                    site_config=site_config,
-                    filter_prompt=filter_prompt,
-                    request_id=request_id,
-                    max_pages=request.max_pages,
-                    headless=request.headless,
-                )
-                async for chunk in event_generator(
-                    session=session,
-                    request_id=request_id,
-                    timeout_seconds=request.timeout_seconds,
-                ):
-                    # 检查客户端断线
-                    if await http_request.is_disconnected():
-                        logger.warning(f"[{request_id}] 客户端断线，停止输出")
-                        return
-                    yield chunk
-            finally:
-                # cleanup 在 event_generator 的 finally 已调用，这里释放锁
-                crawl_lock.release()
+            session.start(
+                site_config=site_config,
+                filter_prompt=filter_prompt,
+                request_id=request_id,
+                max_pages=request.max_pages,
+                headless=request.headless,
+                date_start=str(request.date_start),
+                date_end=str(request.date_end),
+            )
+            async for chunk in event_generator(
+                session=session,
+                request_id=request_id,
+                timeout_seconds=request.timeout_seconds,
+                http_request=http_request,  # 传入 http_request 用于断线检测
+            ):
+                yield chunk
+            # 注意：锁释放由 CrawlStreamingResponse.__call__ 的 finally 处理
         
-        return StreamingResponse(
+        return CrawlStreamingResponse(
             wrapped(),
+            lock=crawl_lock,
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",

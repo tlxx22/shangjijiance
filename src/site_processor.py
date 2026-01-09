@@ -238,7 +238,9 @@ async def process_site(
 	headless: bool = False,
 	max_pages: int = 5,
 	max_retries: int = 3,
-	on_item_saved=None
+	on_item_saved=None,
+	date_start: str = None,
+	date_end: str = None
 ) -> Dict:
 	"""
 	处理单个网站
@@ -276,7 +278,7 @@ async def process_site(
 	output_dir.mkdir(parents=True, exist_ok=True)
 
 	# 初始化LLM
-	llm = ChatBrowserUse(model="bu-latest")  # TODO: 改回 bu-30b-a3b-preview（等官方修复）
+	llm = ChatBrowserUse(model="bu-latest")
 
 	# 标记浏览器是否由本函数创建（用于决定是否关闭）
 	browser_created_here = browser is None
@@ -425,7 +427,9 @@ async def process_site(
 				site_name=site_name,
 				output_dir=output_dir,
 				max_pages=max_pages,
-				on_item_saved=on_item_saved
+				on_item_saved=on_item_saved,
+				date_start=date_start,
+				date_end=date_end
 			)
 			total_items = result.get("items_found", 0)
 			pages_processed = result.get("pages_processed", 0)

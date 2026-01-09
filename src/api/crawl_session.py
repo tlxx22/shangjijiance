@@ -38,6 +38,8 @@ class CrawlSession:
         request_id: str,
         max_pages: int = 3,
         headless: bool = True,
+        date_start: str = None,
+        date_end: str = None,
     ):
         """
         启动后台爬虫任务
@@ -49,7 +51,7 @@ class CrawlSession:
         self._started = True
         
         self._task = asyncio.create_task(
-            self._run(site_config, filter_prompt, request_id, max_pages, headless)
+            self._run(site_config, filter_prompt, request_id, max_pages, headless, date_start, date_end)
         )
 
     async def _run(
@@ -59,6 +61,8 @@ class CrawlSession:
         request_id: str,
         max_pages: int,
         headless: bool,
+        date_start: str,
+        date_end: str,
     ):
         """
         后台爬虫任务，推送事件到队列
@@ -90,7 +94,9 @@ class CrawlSession:
                 headless=headless,
                 max_pages=max_pages,
                 max_retries=1,  # SSE 模式不重试整站
-                on_item_saved=on_item_saved,  # 传入回调
+                on_item_saved=on_item_saved,
+                date_start=date_start,
+                date_end=date_end,
             )
             
             # 根据结果发送 done 或 error
@@ -146,6 +152,7 @@ async def event_generator(
     session: CrawlSession,
     request_id: str,
     timeout_seconds: int,
+    http_request=None,  # 用于断线检测
 ) -> AsyncIterator[str]:
     """
     SSE 事件生成器
@@ -153,7 +160,12 @@ async def event_generator(
     - 轮询 session.queue
     - 发送心跳（30秒无输出）
     - 检测超时
+    - 每 2s 检测客户端断线
     - 最终调用 cleanup
+    
+    断线机制说明：uvicorn/starlette (ASGI spec>=2.4) 主要通过 send() 失败
+    (OSError -> ClientDisconnect) 检测断线，此处额外用 is_disconnected() 检测
+    以便更快（≈2s）感知并停止生成。
     """
     start = time.monotonic()
     deadline = start + timeout_seconds
@@ -171,6 +183,10 @@ async def event_generator(
             try:
                 event = await asyncio.wait_for(session.queue.get(), timeout=2.0)
             except asyncio.TimeoutError:
+                # 每 2s 检查一次断线
+                if http_request and await http_request.is_disconnected():
+                    logger.warning(f"[{request_id}] 客户端断线，停止生成")
+                    return
                 now = time.monotonic()  # 重新取时间
                 if now - last_output >= 30:
                     yield sse_event({"type": "heartbeat"}, request_id)

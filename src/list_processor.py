@@ -102,7 +102,9 @@ async def process_entire_site(
 	output_dir: Path,
 	max_pages: int = 5,
 	max_items_per_page: int = 10,
-	on_item_saved=None
+	on_item_saved=None,
+	date_start: str = None,
+	date_end: str = None
 ) -> Dict:
 	"""
 	单个 Agent 处理整个网站的所有页面
@@ -124,12 +126,16 @@ async def process_entire_site(
 	# 创建自定义工具（传入 llm 用于字段提取，传入回调用于 SSE 输出）
 	tools = create_save_detail_tools(output_dir, site_name, llm=llm, on_item_saved=on_item_saved)
 
-	# 构建日期筛选指令
+	# 日期筛选指令（使用 API 传入的日期，否则默认近2天）
 	from datetime import datetime, timedelta
-	today = datetime.now()
-	yesterday = today - timedelta(days=1)
-	start_date = yesterday.strftime('%Y-%m-%d')
-	end_date = today.strftime('%Y-%m-%d')
+	if date_start and date_end:
+		start_date = date_start
+		end_date = date_end
+	else:
+		today = datetime.now()
+		yesterday = today - timedelta(days=1)
+		start_date = yesterday.strftime('%Y-%m-%d')
+		end_date = today.strftime('%Y-%m-%d')
 
 	# 构建Agent任务（全局规则已通过 extend_system_message 注入）
 	task = f"""
@@ -143,9 +149,15 @@ async def process_entire_site(
 
 1. **业务类型**：点击"不限"
 2. **信息类型**：点击"不限"（获取所有类型的公告）
-3. **日期筛选**：
-   - 优先点击快捷按钮（如"近一天"、"近三天"）
-   - 或使用日历选择 {start_date} 到 {end_date}
+3. **日期筛选**（需判断筛选字段类型）：
+   - **首先观察**筛选控件的标签：是"发布日期"还是"截止日期/开标时间"？
+   - **如果是"发布日期"类筛选**：
+     - 优先点击快捷按钮（如"近一天"、"近三天"）
+     - 或使用日历选择 {start_date} 到 {end_date}
+   - **如果是"截止日期/开标时间"类筛选**：
+     - ⚠️ 不要用 {start_date}~{end_date} 去筛选
+     - 可以选择"从今天开始"或干脆不做日期筛选
+     - 让后续的条目判断规则来过滤
    - 如果日历弹窗有"确定"按钮，选完日期后要点击"确定"
 
 完成筛选后点击"搜索"或"查询"按钮。

@@ -13,6 +13,8 @@ services:
     volumes:
       - ./output:/app/output
       - ./prompts:/app/prompts
+      - ./src:/app/src # 挂载代码目录，改代码只需重启
+      - ./app.py:/app/app.py:ro # 挂载主入口
       - ./sites_config.yaml:/app/sites_config.yaml:ro
       - ./concurrency_config.yaml:/app/concurrency_config.yaml:ro
     shm_size: 2g

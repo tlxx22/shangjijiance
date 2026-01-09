@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 # 你的 URL 和 Data
 url = "http://localhost:8000/crawl" # 换成你的 URL
 data = {
-    "site": {"name": "TestSite", "url": "http://example.com", "login_required": False},
+    "site": {"name": "TestSite", "url": "https://cgpt.china-an.cn/", "login_required": False},
     "date_start": "2026-01-06",
     "date_end": "2026-01-07",
     "category": "fuwu",
