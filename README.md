@@ -1,272 +1,209 @@
 # 商机监测智能体
 
-基于browser-use的AI驱动招投标信息自动监测系统。自动访问多个招投标网站，智能筛选符合条件的招标信息，并完整截图保存。
+基于 browser-use 的 AI 驱动招投标信息自动监测系统。提供 **SSE 流式 HTTP API**，自动访问招投标网站，智能筛选符合条件的招标信息，并完整截图保存。
 
 ## 功能特点
 
-- ✅ **AI智能筛选**：使用LLM理解页面内容，无需编写CSS选择器
+- ✅ **SSE 流式 API**：HTTP 服务实时返回爬取进度和结果
+- ✅ **多 Worker 并发**：Gunicorn + FastAPI 支持同时处理多个请求
+- ✅ **AI 智能筛选**：使用 LLM 理解页面内容，无需编写 CSS 选择器
 - ✅ **自动登录**：智能检测并自动处理登录流程
-- ✅ **完整截图**：混合方案（CDP原生 + 拼接降级）确保完整页面截图
-- ✅ **多网站支持**：通过简单配置支持任意数量的招标网站
-- ✅ **Cookie持久化**：自动保存登录状态，无需重复登录
-- ✅ **智能容错**：重试机制、降级策略，最大化成功率
+- ✅ **完整截图**：支持中文字体渲染，确保截图无乱码
+- ✅ **动态日期范围**：API 传入 date_start/date_end，支持任意时间范围
+- ✅ **智能日期识别**：自动区分"发布日期"和"截止日期"筛选
 
 ## 系统要求
 
 - Python >= 3.11
-- Windows / Linux / macOS
+- Docker（推荐）或 Windows / Linux / macOS
 - 网络连接
-- BROWSER_USE_API_KEY（通过.env文件配置）
+- BROWSER_USE_API_KEY（通过 .env 文件配置）
 
 ## 快速开始
 
-### 1. 安装依赖
+### 方式一：Docker 部署（推荐）
 
 ```bash
-# 安装Python依赖
+# 1. 配置 API 密钥
+cp .env.example .env
+# 编辑 .env，填入 BROWSER_USE_API_KEY
+
+# 2. 启动服务
+docker compose up --build -d
+
+# 3. 查看日志
+docker compose logs -f
+```
+
+### 方式二：本地运行
+
+```bash
+# 1. 安装依赖
 pip install -r requirements.txt
-
-# 安装browser-use的浏览器
 uvx browser-use install
+
+# 2. 配置 .env
+cp .env.example .env
+# 编辑填入 BROWSER_USE_API_KEY
+
+# 3. 启动服务
+uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-### 2. 配置API密钥
+## API 使用
 
-在项目根目录已有 `.env` 文件模板，请编辑它并填入您的API密钥：
-
-```env
-BROWSER_USE_API_KEY=your_api_key_here
-```
-
-**注意**：请将 `your_api_key_here` 替换为您的实际browser-use API密钥。`.env` 文件已添加到 `.gitignore`，不会被提交到版本控制系统。
-
-### 3. 配置网站
-
-编辑 `sites_config.yaml`，添加要监控的招标网站：
-
-```yaml
-websites:
-  - name: "天津采购网"
-    url: "https://example.com/tender/list"
-    login_required: true
-    username: "your_username"
-    password: "your_password"
-
-  - name: "北京招投标"
-    url: "https://example2.com/list"
-    login_required: false
-```
-
-### 4. 配置筛选条件
-
-编辑 `prompt.txt`，设置您的筛选条件：
-
-```
-关键领域：建筑相关
-时间范围：近两天内发布
-```
-
-### 5. 运行程序
+### 健康检查
 
 ```bash
-python main.py
+curl http://localhost:8000/health
 ```
 
-## 配置说明
+### 发起爬取请求
 
-### sites_config.yaml
+```bash
+curl -X POST http://localhost:8000/crawl \
+  -H "Content-Type: application/json" \
+  -d '{
+    "site": {
+      "name": "某招标网站",
+      "url": "https://example.com/tender/list",
+      "login_required": false
+    },
+    "date_start": "2026-01-08",
+    "date_end": "2026-01-09",
+    "category": "fuwu",
+    "max_pages": 3
+  }'
+```
+
+### SSE 事件类型
+
+| 事件类型 | 说明 |
+|---------|------|
+| `start` | 开始爬取 |
+| `item` | 每条数据实时输出 |
+| `heartbeat` | 每 30 秒心跳保活 |
+| `done` | 爬取完成 |
+| `error` | 出错/超时 |
+
+### 请求参数
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| name | 是 | 网站名称（用于日志和输出目录） |
-| url | 是 | 招标列表页URL（不是首页！） |
-| login_required | 是 | 是否需要登录（true/false） |
-| username | 条件 | 用户名（login_required为true时必填） |
-| password | 条件 | 密码（login_required为true时必填） |
+| site.name | 是 | 网站名称 |
+| site.url | 是 | 招标列表页 URL |
+| site.login_required | 否 | 是否需要登录（默认 false） |
+| site.username | 条件 | 登录用户名 |
+| site.password | 条件 | 登录密码 |
+| date_start | 是 | 筛选开始日期 |
+| date_end | 是 | 筛选结束日期 |
+| category | 是 | 分类（对应 prompts/ 目录下的模板） |
+| max_pages | 否 | 最大翻页数（默认 3） |
+| timeout_seconds | 否 | 超时时间（默认 1800s） |
+| headless | 否 | 无头模式（默认 true） |
 
-### prompt.txt
+### 错误码
 
-详细描述您的筛选条件，包括：
-- 关键领域（如"建筑"、"IT设备"等）
-- 时间范围
-- 包含哪些类型
-- 排除哪些类型
+| 状态码 | 说明 |
+|-------|------|
+| 200 | 成功（SSE 流） |
+| 400 | 参数验证失败 |
+| 429 | 当前 Worker 繁忙 |
+| 500 | 服务器内部错误 |
 
-示例见 [prompt.txt](prompt.txt)
+## 配置说明
+
+### 环境变量
+
+| 变量 | 说明 |
+|------|------|
+| BROWSER_USE_API_KEY | browser-use API 密钥（必填） |
+| WORKERS | Gunicorn Worker 数量（默认 5） |
+
+### prompts/ 目录
+
+提示词模板按分类存放，支持占位符：
+
+- `{date_start}` - 开始日期
+- `{date_end}` - 结束日期
+- `{today}` - 今天日期
+- `{site_name}` - 网站名称
+
+### docker-compose.yml
+
+关键配置：
+
+- `WORKERS=5`：并发 Worker 数量
+- `shm_size: 2g`：Chrome 共享内存
+- 代码目录已挂载，改代码只需重启
 
 ## 输出结构
 
 ```
 output/
-└── 2025-12-18/                    # 按日期组织
-    ├── 天津采购网/
-    │   ├── 项目A_2025-12-18.png   # 详情页完整截图
-    │   ├── 项目A_2025-12-18.json  # 元数据
-    │   ├── 项目B_2025-12-18.png
-    │   └── 项目B_2025-12-18.json
-    ├── 北京招投标/
-    │   └── ...
-    ├── summary.json                # 汇总报告
-    └── run_log.txt                 # 执行日志
+└── 2026-01-09/
+    └── 网站名称/
+        ├── 项目A_2026-01-09.png   # 详情页截图
+        └── 项目A_2026-01-09.json  # 元数据
 ```
 
-### JSON元数据格式
+### JSON 元数据格式
 
 ```json
 {
   "title": "招标标题",
-  "date": "2025-12-18",
-  "screenshot_path": "项目A_2025-12-18.png",
-  "captured_at": "2025-12-18 14:30:25",
-  "source_website": "天津采购网",
+  "date": "2026-01-09",
+  "bidopentime": "2026-01-15",
+  "bidamount": "100万元",
+  "area": "北京",
+  "source_website": "某招标网站",
   "detail_url": "https://..."
 }
 ```
 
-### summary.json格式
+## 运维命令
 
-```json
-{
-  "date": "2025-12-18",
-  "summary": {
-    "total_websites": 20,
-    "successful": 15,
-    "failed": 5,
-    "total_items_found": 127
-  },
-  "by_website": [
-    {
-      "name": "天津采购网",
-      "status": "success",
-      "items_found": 23,
-      "pages_processed": 5
-    },
-    ...
-  ]
-}
-```
+```bash
+# 查看状态
+docker compose ps
 
-## 高级配置
+# 查看日志
+docker compose logs -f
 
-### 修改最大页数
+# 重启服务
+docker compose restart
 
-编辑 `src/config_manager.py` 中的默认值：
+# 停止服务
+docker compose down
 
-```python
-max_pages: int = 5  # 改为你需要的数字
-```
+# 重新构建
+docker compose up --build -d
 
-### 修改重试次数
-
-```python
-max_retries: int = 3  # 改为你需要的数字
-```
-
-### 无头模式（headless）
-
-编辑 `src/site_processor.py`：
-
-```python
-browser = Browser(
-    headless=True,  # 改为True则不显示浏览器窗口
-)
-```
-
-## 故障排查
-
-### 1. 登录失败
-
-**问题**：网站需要登录但自动登录失败
-
-**解决方案**：
-1. 检查 sites_config.yaml 中的账号密码是否正确
-2. 第一次运行时手动登录一次，Cookie会自动保存
-3. 如果网站有复杂验证码，考虑使用 `login_required: false`
-
-### 2. 找不到匹配条目
-
-**问题**：运行完成但没有找到任何匹配
-
-**解决方案**：
-1. 检查 prompt.txt 中的筛选条件是否过于严格
-2. 检查网站列表页URL是否正确
-3. 查看 `output/YYYY-MM-DD/run_log.txt` 日志了解详情
-
-### 3. 截图失败
-
-**问题**：程序报告"截图失败"
-
-**解决方案**：
-1. 检查网络连接
-2. 查看日志确认是CDP失败还是拼接失败
-3. 尝试增加页面加载等待时间
-
-### 4. 浏览器崩溃
-
-**问题**：浏览器频繁崩溃或无响应
-
-**解决方案**：
-1. 检查系统内存是否充足
-2. 减少 `max_pages` 数值
-3. 使用无头模式（headless=True）
-
-## 项目结构
-
-```
-shangjijiance/
-├── src/
-│   ├── __init__.py
-│   ├── logger_config.py        # 日志配置
-│   ├── config_manager.py       # 配置管理
-│   ├── custom_tools.py         # 自定义工具（截图等）
-│   ├── login_handler.py        # 登录处理
-│   ├── list_processor.py       # 列表页分析
-│   ├── detail_processor.py     # 详情页处理
-│   └── site_processor.py       # 网站处理主流程
-│
-├── main.py                     # 程序入口
-├── sites_config.yaml           # 网站配置
-├── prompt.txt                  # 筛选条件
-├── requirements.txt            # 依赖列表
-└── README.md                   # 本文件
+# 资源监控
+docker stats
 ```
 
 ## 常见问题
 
 **Q: 可以同时处理多个网站吗？**
-A: 目前是顺序处理（一次一个网站），保证稳定性。未来版本可能支持并发。
+A: 支持并发。每个 Worker 同时处理一个请求，默认 5 个 Worker。
 
-**Q: 支持哪些网站？**
-A: 理论上支持所有招投标网站，只需在配置文件中添加URL。
+**Q: 截图中文乱码怎么办？**
+A: Docker 镜像已包含中文字体，需重新构建：`docker compose up --build`
 
-**Q: 如何修改筛选条件？**
-A: 编辑 `prompt.txt` 文件，保存后下次运行自动生效。
+**Q: Worker 繁忙怎么办？**
+A: 增加 Worker 数量：编辑 `docker-compose.yml` 中 `WORKERS=10`，然后重启。
 
-**Q: 为什么有些网站没有结果？**
-A: 可能原因：1) 该网站确实没有符合条件的招标 2) 网站需要登录但未配置 3) 网站有反爬虫限制
-
-**Q: 可以定时自动运行吗？**
-A: 程序本身不包含调度功能，建议使用系统定时任务：
-- Windows: 任务计划程序
-- Linux: crontab
-- 云服务: 云函数定时触发器
+**Q: 如何添加新的分类？**
+A: 在 `prompts/` 目录创建 `分类名.txt` 文件，API 请求时 `category` 填写文件名（不含扩展名）。
 
 ## 技术栈
 
-- **browser-use**: AI浏览器自动化框架
-- **Pydantic**: 数据验证
-- **PyYAML**: 配置文件解析
-- **Pillow**: 图像处理
-- **Rich**: CLI美化
+- **FastAPI** + **Gunicorn**：HTTP API 服务
+- **browser-use**：AI 浏览器自动化
+- **Docker**：容器化部署
+- **SSE**：Server-Sent Events 实时流
 
 ## 许可证
 
 MIT License
-
-## 贡献
-
-欢迎提交Issue和Pull Request！
-
-## 支持
-
-如有问题，请查看日志文件 `output/YYYY-MM-DD/run_log.txt`

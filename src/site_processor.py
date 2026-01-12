@@ -278,7 +278,7 @@ async def process_site(
 	output_dir.mkdir(parents=True, exist_ok=True)
 
 	# 初始化LLM
-	llm = ChatBrowserUse(model="bu-latest")
+	llm = ChatBrowserUse(model="bu-30b-a3b-preview")
 
 	# 标记浏览器是否由本函数创建（用于决定是否关闭）
 	browser_created_here = browser is None

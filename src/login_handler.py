@@ -69,7 +69,7 @@ async def smart_login(site_config: SiteConfig, browser, llm) -> bool:
 			page_status = 'unknown'
 
 	except Exception as e:
-		# 直接抛出原始错误，不要误报为"需要登录"
+		# 直接抛出原始错误"
 		logger.error(f"[{site_name}] 页面状态检测失败: {e}")
 		raise  # 让调用方处理实际的错误
 
