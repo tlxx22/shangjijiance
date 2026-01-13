@@ -1,6 +1,6 @@
 # Gunicorn 配置文件
 
-bind = "0.0.0.0:8000"
+bind = "0.0.0.0:80"
 import os
 workers = int(os.getenv("WORKERS", 5))
 worker_class = "uvicorn.workers.UvicornWorker"
