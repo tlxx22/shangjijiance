@@ -4,7 +4,7 @@ def configMap = [:]
 
 // =================General settings==================
 configMap.put("SERVICE", "crawler-agent")  // 项目名字
-configMap.put("PLATFORMS", "g-platformb2hzf")  // 平台
+configMap.put("PLATFORMS", "g-platform")  // 平台
 
 // =================Advanced settings=================
 // ***************************************************
