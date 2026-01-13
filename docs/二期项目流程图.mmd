@@ -1,9 +1,13 @@
 %% ============================================
+%% ⚠️ 历史文档：本图描述的是 CLI 批量处理架构
+%% 已被 SSE HTTP API 架构取代（app.py 入口）
+%% 保留仅供参考
+%% ============================================
 %% 二期项目完整数据流转图 (AI Agent架构)
 %% ============================================
 flowchart TB
-    subgraph 入口["启动入口"]
-        START["main.py 启动<br/>加载 sites_config.yaml"]
+    subgraph 入口["启动入口 (LEGACY)"]
+        START["main.py 启动<br/>加载 sites_config.yaml<br/>(已废弃，现用 app.py API)"]
     end
 
     subgraph 网站["招投标网站"]

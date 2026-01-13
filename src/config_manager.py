@@ -33,9 +33,10 @@ class Config(BaseModel):
 	max_retries: int = 3  # 默认重试3次
 
 
+# LEGACY: 以下函数仅供 CLI 模式（main.py）使用，API 模式不使用
 def load_config(config_path: str = "sites_config.yaml", prompt_path: str = "prompt.txt") -> Config:
 	"""
-	加载配置文件
+	[LEGACY - CLI only] 加载配置文件
 
 	Args:
 		config_path: 网站配置文件路径
@@ -157,7 +158,7 @@ def generate_extract_prompt(fields: List[ExtractField]) -> str:
 	return "\n".join(lines)
 
 
-# ============ 并发配置 ============
+# ============ LEGACY: 并发配置（仅 CLI 模式使用）============
 
 class ConcurrencySettings(BaseModel):
 	"""并发设置"""

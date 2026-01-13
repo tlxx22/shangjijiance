@@ -128,7 +128,6 @@ def setup_logger(name: str = "shangjijiance", log_dir: str = "output"):
     """
     兼容旧接口，实际调用 init_logger()
     
-    保留此函数是为了兼容 main.py / concurrent_processor.py 的 import
     """
     init_logger()
     return logger
