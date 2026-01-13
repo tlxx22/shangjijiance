@@ -3,8 +3,8 @@ library 'sharelib-remake'
 def configMap = [:]
 
 // =================General settings==================
-configMap.put("SERVICE", "shangjijiance-crawler")  // 项目名字
-configMap.put("PLATFORMS", "global-platform")  // 平台
+configMap.put("SERVICE", "crawler-agent")  // 项目名字
+configMap.put("PLATFORMS", "g-platform")  // 平台
 
 // =================Advanced settings=================
 // ***************************************************
