@@ -18,6 +18,7 @@ if sys.platform == 'win32':
 from dotenv import load_dotenv
 load_dotenv()
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
@@ -25,14 +26,26 @@ from src.api.models import CrawlRequest
 from src.api.prompt_manager import load_prompt_template, render_prompt
 from src.api.crawl_session import CrawlSession, event_generator
 from src.config_manager import SiteConfig
-from src.logger_config import get_logger
+from src.logger_config import get_logger, init_logger, set_request_id, reset_request_id
 
 logger = get_logger()
+
+
+# ===== FastAPI Lifespan =====
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理：启动时初始化日志"""
+    init_logger()
+    logger.info("商机监测 API 服务启动")
+    yield
+    logger.info("商机监测 API 服务关闭")
+
 
 app = FastAPI(
     title="商机监测 API",
     description="SSE 流式爬取招标信息",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # 自定义验证错误处理：返回 400 而不是 422
@@ -131,22 +144,28 @@ async def crawl(request: CrawlRequest, http_request: Request):
         
         # session.start() 放到 wrapped() 里，确保爬虫只在流开始时启动
         async def wrapped():
-            session.start(
-                site_config=site_config,
-                filter_prompt=filter_prompt,
-                request_id=request_id,
-                max_pages=request.max_pages,
-                headless=request.headless,
-                date_start=str(request.date_start),
-                date_end=str(request.date_end),
-            )
-            async for chunk in event_generator(
-                session=session,
-                request_id=request_id,
-                timeout_seconds=request.timeout_seconds,
-                http_request=http_request,  # 传入 http_request 用于断线检测
-            ):
-                yield chunk
+            # 设置 request_id 到 contextvars，自动注入到所有日志
+            token = set_request_id(request_id)
+            try:
+                session.start(
+                    site_config=site_config,
+                    filter_prompt=filter_prompt,
+                    request_id=request_id,
+                    max_pages=request.max_pages,
+                    headless=request.headless,
+                    date_start=str(request.date_start),
+                    date_end=str(request.date_end),
+                )
+                async for chunk in event_generator(
+                    session=session,
+                    request_id=request_id,
+                    timeout_seconds=request.timeout_seconds,
+                    http_request=http_request,  # 传入 http_request 用于断线检测
+                ):
+                    yield chunk
+            finally:
+                # 重置 request_id，防止串号
+                reset_request_id(token)
             # 注意：锁释放由 CrawlStreamingResponse.__call__ 的 finally 处理
         
         return CrawlStreamingResponse(
