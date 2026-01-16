@@ -1,13 +1,24 @@
+# 三一正式环境 Dockerfile
 FROM devops-harbor.sany.com.cn/devops/crawler-agent-base:stable
-LABEL yaowu=yunwei@yaowutech.com
-ENV UV_DEFAULT_INDEX=https://devops-jfrog.sany.com.cn/artifactory/api/pypi/sany-pypi-group/simple UV_NO_CACHE=true PIP_NO_CACHE_DIR=true
+
+LABEL maintainer="yunwei@yaowutech.com"
+
+ENV UV_DEFAULT_INDEX=https://devops-jfrog.sany.com.cn/artifactory/api/pypi/sany-pypi-group/simple \
+    UV_NO_CACHE=true \
+    PIP_NO_CACHE_DIR=true
+
 WORKDIR /app
 COPY . /app/
+
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
     sed -i 's#mirrors.ustc.edu.cn#mirrors.cloud.aliyuncs.com#g' /etc/apt/sources.list.d/debian.sources && \
+    # 安装 Python 依赖
     uv sync && \
-    sed -i \"s/valid_models = \\['bu-latest', 'bu-1-0'\\]/valid_models = ['bu-latest', 'bu-1-0', 'bu-30b-a3b-preview']/g\" \$UV_PROJECT_ENVIRONMENT/lib/python3.11/site-packages/browser_use/llm/browser_use/chat.py" && \
-    mkdir -p /root/.cache/ms-playwright && \
-    ln -sf /mnt/.devops_uv_cache/venv/browsers/* /root/.cache/ms-playwright/ && \
-    ln -sf /root/.cache/ms-playwright/chromium-1200/chrome-linux64 /root/.cache/ms-playwright/chromium-1200/chrome-linux
-ENTRYPOINT exec /mnt/.devops_uv_cache/venv/bin/gunicorn -c gunicorn.conf.py app:app
+    # 修复目录名问题（chrome-linux64 -> chrome-linux）
+    sh -c 'for d in /root/.cache/ms-playwright/chromium-*/; do ln -sf "${d}chrome-linux64" "${d}chrome-linux" 2>/dev/null; done' && \
+    # 添加新模型支持
+    sed -i "s/valid_models = \['bu-latest', 'bu-1-0'\]/valid_models = ['bu-latest', 'bu-1-0', 'bu-30b-a3b-preview']/g" \
+    .venv/lib/python3.11/site-packages/browser_use/llm/browser_use/chat.py
+
+# 启动命令
+CMD [".venv/bin/gunicorn", "-c", "gunicorn.conf.py", "app:app"]
