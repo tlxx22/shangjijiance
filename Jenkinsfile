@@ -16,4 +16,3 @@ configMap.put("APP_RUN_COMMAND", "sh -c 'ln -sf /root/.cache/ms-playwright/chrom
 configMap.put("DOCKERFILE_BASE_IMAGE", "yaowu-registry-vpc.cn-shanghai.cr.aliyuncs.com/pulic/crawler-agent-base:stable")  // 爬虫基础镜像
 
 hello(configMap)
-

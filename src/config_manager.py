@@ -22,7 +22,11 @@ class ExtractField(BaseModel):
 	"""单个提取字段定义"""
 	key: str  # 字段键名（英文）
 	name: str  # 字段中文名
-	hint: str  # 提取提示
+	type: str = "string"  # 类型: string, number, boolean, array
+	stage: str = "flat"  # 分组: flat | lots
+	required: bool = False  # 是否必填（用于 prompt 强约束）
+	enum: list[str] | None = None  # 枚举值（用于 prompt 强约束）
+	hint: str = ""  # 提取提示
 
 
 class Config(BaseModel):
@@ -102,15 +106,16 @@ def get_user_data_dir(site_name: str, base_dir: str = ".browser-profiles") -> st
 	return str(path)
 
 
-def load_extract_fields(fields_path: str = "extract_fields.yaml") -> List[ExtractField]:
+def load_extract_fields(fields_path: str = "extract_fields.yaml", stage: str | None = None) -> List[ExtractField]:
 	"""
 	加载字段提取配置
 
 	Args:
 		fields_path: 字段配置文件路径
+		stage: 可选，按 stage 过滤（flat/lots）
 
 	Returns:
-		字段定义列表
+		字段定义列表（可按 stage 过滤）
 
 	Raises:
 		FileNotFoundError: 配置文件不存在
@@ -122,38 +127,63 @@ def load_extract_fields(fields_path: str = "extract_fields.yaml") -> List[Extrac
 	with open(fields_file, 'r', encoding='utf-8') as f:
 		raw_config = yaml.safe_load(f)
 
-	fields = []
+	fields: list[ExtractField] = []
 	for field_data in raw_config.get('fields', []):
 		if 'key' not in field_data or 'name' not in field_data:
 			raise ValueError(f"字段配置缺少必需字段: {field_data}")
-		fields.append(ExtractField(**field_data))
+		field = ExtractField(**field_data)
+		if stage is None or field.stage == stage:
+			fields.append(field)
 
 	return fields
 
 
-def generate_extract_prompt(fields: List[ExtractField]) -> str:
+def generate_extract_prompt(fields: List[ExtractField], stage: str) -> str:
 	"""
 	根据字段定义生成提取提示词
 
 	Args:
 		fields: 字段定义列表
+		stage: flat / lots
 
 	Returns:
 		提取提示词字符串
 	"""
-	lines = ["从当前详情页提取以下字段，找不到的填空字符串：", ""]
+	lines = ["从当前详情页提取以下字段，返回 JSON：", ""]
+
+	lines.append("**类型与空值规则：**")
+	lines.append('- string: 找不到填 ""')
+	lines.append("- number: 找不到填 null")
+	lines.append("- boolean: 只能填 true 或 false")
+	lines.append("- array: 找不到填 []")
+	lines.append("- JSON 必须严格合法：key 必须使用双引号（\"\"），不能用单引号，不能省略引号")
+	lines.append("")
+
+	if stage == "flat":
+		lines.append("**额外规则：**")
+		lines.append("- 金额字段单位为“万元”，无单位数字视为万元；如带“元/万/亿”，请换算成万元")
+		lines.append("- 日期字段统一为 YYYY-MM-DD")
+		lines.append("- 公告类别必须从枚举中选择一个")
+		lines.append("")
+	elif stage == "lots":
+		lines.append("**额外规则：**")
+		lines.append("- lotProducts/lotCandidates 必须返回数组；未提及则返回 []")
+		lines.append("- lotNumber 若页面未写明，填 \"标段一\"（不要留空）")
+		lines.append("- 若页面未明确拆分多个标段，但能识别到标的物/采购内容/候选报价信息，请以整页为一个标段对象输出（不要返回空数组）")
+		lines.append("- 单价/报价字段单位为“万元”，保留两位小数（多个用逗号分隔）")
+		lines.append("")
 
 	for i, field in enumerate(fields, 1):
-		lines.append(f"{i}. {field.key} - {field.name}")
+		required_hint = "【必填】" if field.required else ""
+		type_hint = f"（类型: {field.type}）"
+		lines.append(f"{i}. {field.key} - {field.name} {type_hint} {required_hint}".strip())
 		if field.hint:
 			lines.append(f"   提示：{field.hint}")
+		if field.enum:
+			lines.append(f"   可选值：{', '.join(field.enum)}")
 
 	lines.append("")
-	lines.append("返回 JSON 格式，示例：")
-
-	# 生成示例 JSON
-	example_fields = ', '.join([f'"{f.key}": "..."' for f in fields[:3]])
-	lines.append(f'{{{example_fields}, ...}}')
+	lines.append("只返回 JSON，不要解释、不要代码块。")
 
 	return "\n".join(lines)
 

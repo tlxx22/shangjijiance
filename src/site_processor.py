@@ -384,23 +384,27 @@ async def process_site(
 			else:
 				logger.warning(f"[{site_name}] 无法获取iframe URL，继续处理")
 
-			# ========== 检测并进入列表页（处理"更多"按钮） ==========
-			enter_success = await enter_list_page(browser, llm, site_name)
-			if not enter_success:
-				# enter_list_page 执行失败，关闭浏览器并跳过（仅当本函数创建时）
-				if browser_created_here:
-					logger.info(f"[{site_name}] 正在关闭浏览器...")
-					try:
-						await browser.kill()
-						logger.info(f"[{site_name}] ✓ 浏览器已关闭")
-					except Exception as e:
-						logger.warning(f"[{site_name}] 关闭浏览器时出错: {e}")
-				return {
-					"status": "failed",
-					"items_found": 0,
-					"pages_processed": 0,
-					"error": "进入列表页失败"
-				}
+			# ========== [暂不启用] 检测并进入列表页（处理"更多"按钮） ==========
+			# 产品侧提供的入口 URL 已经是列表页，先跳过：
+			# 1) 判断是否在列表页
+			# 2) 检查并点击“更多”进入列表页
+			#
+			# enter_success = await enter_list_page(browser, llm, site_name)
+			# if not enter_success:
+			# 	# enter_list_page 执行失败，关闭浏览器并跳过（仅当本函数创建时）
+			# 	if browser_created_here:
+			# 		logger.info(f"[{site_name}] 正在关闭浏览器...")
+			# 		try:
+			# 			await browser.kill()
+			# 			logger.info(f"[{site_name}] ✓ 浏览器已关闭")
+			# 		except Exception as e:
+			# 			logger.warning(f"[{site_name}] 关闭浏览器时出错: {e}")
+			# 	return {
+			# 		"status": "failed",
+			# 		"items_found": 0,
+			# 		"pages_processed": 0,
+			# 		"error": "进入列表页失败"
+			# 	}
 
 			# 【安全检查3】进入列表页后检查页面安全
 			if not await check_page_security(browser, llm, site_name):

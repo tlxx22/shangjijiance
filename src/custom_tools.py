@@ -5,8 +5,9 @@
 
 import asyncio
 import base64
+import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 from PIL import Image
 from io import BytesIO
 import re
@@ -428,74 +429,146 @@ def save_screenshot(screenshot_base64: str, filepath: Path) -> bool:
 # ============ Agent 自定义工具 ============
 
 import json
+import yaml
 from datetime import datetime
 from pydantic import BaseModel, Field
 from browser_use import Agent
 from browser_use.tools.service import Tools
 from .config_manager import load_extract_fields, generate_extract_prompt
+from .field_schemas import (
+	LotProducts,
+	LotCandidates,
+	normalize_announcement_type,
+	_to_wan_yuan,
+	normalize_date_ymd,
+	normalize_estimated_amount,
+)
+from .oss_client import OSSClient
 
 
 # 全局缓存字段配置和提示词（避免每次调用都读取文件）
-_extract_fields_cache = None
-_extract_prompt_cache = None
+_extract_fields_cache: dict[str, list] = {}
+_extract_prompt_cache: dict[str, str] = {}
+
+TYPE_DEFAULTS = {
+	"string": "",
+	"number": None,
+	"boolean": False,
+	"array": [],
+}
 
 
-def get_extract_prompt() -> str:
+def _unescape_control_chars_outside_strings(text: str) -> str:
 	"""
-	获取字段提取提示词（带缓存）
+	LLM/Agent 有时会把换行写成字面量 "\\n"（以及 "\\t"/"\\r"），导致整体不再是合法 JSON/YAML。
+
+	此函数只在 *非字符串上下文* 下把这些转义序列还原为真实空白字符，
+	避免把字符串值里的 "\\n" 变成真实换行从而破坏 JSON。
 	"""
-	global _extract_fields_cache, _extract_prompt_cache
+	out: list[str] = []
+	in_string = False
+	escape = False
+	i = 0
+	while i < len(text):
+		ch = text[i]
 
-	if _extract_prompt_cache is None:
-		try:
-			_extract_fields_cache = load_extract_fields()
-			_extract_prompt_cache = generate_extract_prompt(_extract_fields_cache)
-		except FileNotFoundError:
-			# 如果配置文件不存在，返回空（不提取字段）
-			_extract_prompt_cache = ""
+		if in_string:
+			out.append(ch)
+			if escape:
+				escape = False
+			else:
+				if ch == "\\":
+					escape = True
+				elif ch == '"':
+					in_string = False
+			i += 1
+			continue
 
-	return _extract_prompt_cache
+		# 非字符串上下文
+		if ch == '"':
+			in_string = True
+			out.append(ch)
+			i += 1
+			continue
+
+		# 处理 \\n/\\r/\\t（仅限非字符串）
+		if ch == "\\" and i + 1 < len(text):
+			nxt = text[i + 1]
+			if nxt == "n":
+				out.append("\n")
+				i += 2
+				continue
+			if nxt == "r":
+				out.append("\r")
+				i += 2
+				continue
+			if nxt == "t":
+				out.append("\t")
+				i += 2
+				continue
+
+		out.append(ch)
+		i += 1
+
+	return "".join(out)
 
 
-def get_extract_field_keys() -> list:
+def get_extract_fields(stage: str) -> list:
 	"""
-	获取所有字段的 key 列表（用于生成空值字典）
+	获取字段配置列表（按 stage 缓存）
 	"""
 	global _extract_fields_cache
 
-	if _extract_fields_cache is None:
+	stage = (stage or "").strip() or "flat"
+	if stage not in _extract_fields_cache:
 		try:
-			_extract_fields_cache = load_extract_fields()
+			_extract_fields_cache[stage] = load_extract_fields(stage=stage)
 		except FileNotFoundError:
-			return []
+			_extract_fields_cache[stage] = []
 
-	return [f.key for f in _extract_fields_cache]
+	return _extract_fields_cache[stage]
 
 
-async def extract_fields_from_page(browser_session, llm, site_name: str) -> dict:
+def get_extract_prompt(stage: str) -> str:
 	"""
-	使用 Agent 从当前详情页提取字段
+	获取字段提取提示词（按 stage 缓存）
+	"""
+	global _extract_prompt_cache
+
+	stage = (stage or "").strip() or "flat"
+	if stage not in _extract_prompt_cache:
+		fields = get_extract_fields(stage)
+		_extract_prompt_cache[stage] = generate_extract_prompt(fields, stage=stage) if fields else ""
+
+	return _extract_prompt_cache[stage]
+
+
+async def extract_fields_from_page(browser_session, llm, site_name: str, stage: str) -> dict:
+	"""
+	使用 Agent 从当前详情页提取字段（V2）
 
 	Args:
 		browser_session: 浏览器会话
 		llm: LLM 实例
 		site_name: 网站名称
+		stage: flat / lots
 
 	Returns:
-		提取的字段字典，提取失败返回空值字典
+		提取的字段字典（已归一化），提取失败返回空值字典
 	"""
-	extract_prompt = get_extract_prompt()
-	field_keys = get_extract_field_keys()
+	stage = (stage or "").strip() or "flat"
+	extract_prompt = get_extract_prompt(stage)
+	fields = get_extract_fields(stage)
 
 	# 如果没有配置字段，返回空字典
-	if not extract_prompt or not field_keys:
+	if not extract_prompt or not fields:
 		return {}
 
-	# 生成空值字典作为默认值
-	empty_result = {key: "" for key in field_keys}
+	# 根据类型生成空值字典
+	empty_result = {f.key: TYPE_DEFAULTS.get(f.type, "") for f in fields}
 
 	try:
-		logger.info(f"[{site_name}] 正在提取详情页字段...")
+		logger.info(f"[{site_name}] 正在提取详情页字段（stage={stage}）...")
 
 		extract_agent = Agent(
 			task=f"""
@@ -503,59 +576,159 @@ async def extract_fields_from_page(browser_session, llm, site_name: str) -> dict
 
 **重要提示：**
 - 仔细阅读页面内容，提取上述所有字段
-- 找不到的字段填空字符串 ""
-- 金额字段只填数字，不要带单位（如果是万元，转换为元）
-- 日期字段格式为 YYYY-MM-DD
-- 只返回 JSON，不要有其他内容
+- 按类型填写空值（string填\"\"，number填null，array填[]）
+- 金额字段单位为“万元”，无单位数字视为万元
+- 日期字段格式为 YYYY-MM-DD（如 2026-02-16）
+- 只返回 JSON，不要解释、不要代码块
 - 不要执行任何点击或导航操作，只读取当前页面
 """,
 			llm=llm,
 			browser=browser_session,
-			max_steps=2  # 只需要读取页面，不需要操作
+			max_steps=2,
 		)
 
 		result = await extract_agent.run()
 		output = result.final_result()
 
 		if not output:
-			logger.warning(f"[{site_name}] 字段提取无返回")
+			logger.warning(f"[{site_name}] 字段提取无返回（stage={stage}）")
 			return empty_result
 
 		# 尝试解析 JSON
 		try:
-			# 清理输出，提取 JSON 部分
 			output_str = str(output).strip()
 
-			# 处理转义引号（Agent 输出可能包含 \" 而非 "）
+			# 处理转义引号（Agent 输出可能包含 \\\" 而非 \"）
 			if '\\"' in output_str:
 				output_str = output_str.replace('\\"', '"')
 
 			# 移除可能的 markdown 代码块标记
-			output_str = re.sub(r'^```json\s*', '', output_str)
-			output_str = re.sub(r'^```\s*', '', output_str)
-			output_str = re.sub(r'\s*```$', '', output_str)
+			output_str = re.sub(r'^```json\\s*', '', output_str)
+			output_str = re.sub(r'^```\\s*', '', output_str)
+			output_str = re.sub(r'\\s*```$', '', output_str)
 
-			# 尝试找到 JSON 对象（支持嵌套）
-			json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', output_str, re.DOTALL)
-			if json_match:
-				extracted = json.loads(json_match.group())
-				# 合并提取结果和空值字典（确保所有字段都有值）
-				for key in field_keys:
-					if key not in extracted:
-						extracted[key] = ""
-				logger.info(f"[{site_name}] ✓ 字段提取成功")
-				return extracted
+			# 提取 JSON/YAML 片段：优先 {..}，否则 [..]，否则尝试整段解析
+			obj_start = output_str.find('{')
+			obj_end = output_str.rfind('}')
+			arr_start = output_str.find('[')
+			arr_end = output_str.rfind(']')
+
+			if obj_start != -1 and obj_end > obj_start:
+				snippet = output_str[obj_start:obj_end + 1]
+			elif arr_start != -1 and arr_end > arr_start:
+				snippet = output_str[arr_start:arr_end + 1]
 			else:
-				logger.warning(f"[{site_name}] 无法从输出中提取 JSON")
+				snippet = output_str
+
+			# 去掉常见的结尾多余逗号（LLM 有时会输出 trailing comma）
+			snippet = re.sub(r',(\s*[}\]])', r'\1', snippet)
+
+			# 有些 Agent 会输出字面量 "\n"（而非真实换行），先做一次安全还原
+			snippet = _unescape_control_chars_outside_strings(snippet)
+
+			# 先按严格 JSON 解析，失败则降级为 YAML（容忍单引号/不加引号 key）
+			try:
+				extracted = json.loads(snippet)
+			except json.JSONDecodeError as e_json:
+				try:
+					extracted = yaml.safe_load(snippet)
+					if extracted is None:
+						extracted = {}
+				except Exception as e_yaml:
+					logger.warning(
+						f"[{site_name}] JSON/YAML 解析失败（stage={stage}）: {e_json} / {e_yaml}"
+					)
+					return empty_result
+
+			# stage=lots 允许 LLM 直接返回数组，按内容推断属于哪个字段
+			if stage == "lots" and isinstance(extracted, list):
+				has_candidate_keys = any(
+					isinstance(x, dict) and any(k in x for k in ("candidates", "candidatePrices", "winner"))
+					for x in extracted
+				)
+				extracted = {
+					"lotProducts": [] if has_candidate_keys else extracted,
+					"lotCandidates": extracted if has_candidate_keys else [],
+				}
+
+			if not isinstance(extracted, dict):
+				logger.warning(f"[{site_name}] 解析结果不是对象（stage={stage}），返回空值")
 				return empty_result
 
+			# 顶层 key 容错：支持 snake_case（如 lot_products）
+			for f in fields:
+				if f.key in extracted:
+					continue
+				snake = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', f.key).lower()
+				if snake in extracted:
+					extracted[f.key] = extracted.get(snake)
+
+			# 类型归一化
+			normalized: dict = {}
+			for f in fields:
+				raw_value = extracted.get(f.key, TYPE_DEFAULTS.get(f.type, ""))
+				normalized[f.key] = normalize_field_value(f.key, raw_value, f.type)
+
+			logger.info(f"[{site_name}] ✓ 字段提取成功（stage={stage}）")
+			return normalized
+
 		except json.JSONDecodeError as e:
-			logger.warning(f"[{site_name}] JSON 解析失败: {e}")
+			logger.warning(f"[{site_name}] JSON 解析失败（stage={stage}）: {e}")
 			return empty_result
 
 	except Exception as e:
-		logger.error(f"[{site_name}] 字段提取失败: {e}")
+		logger.error(f"[{site_name}] 字段提取失败（stage={stage}）: {e}")
 		return empty_result
+
+
+def normalize_field_value(key: str, value: Any, field_type: str):
+	"""
+	根据字段类型归一化值（V2）
+	"""
+	if field_type == "array":
+		if key == "lotProducts":
+			items = LotProducts.model_validate(value).root
+			return [i.model_dump() for i in items]
+		if key == "lotCandidates":
+			items = LotCandidates.model_validate(value).root
+			return [i.model_dump() for i in items]
+
+		if value is None:
+			return []
+		if isinstance(value, list):
+			return value
+		if isinstance(value, dict):
+			return [value]
+		if isinstance(value, str):
+			s = value.strip()
+			if s.lower() in {"", "[]", "null", "none", "无", "暂无"}:
+				return []
+			try:
+				parsed = json.loads(s)
+				if isinstance(parsed, list):
+					return parsed
+				if isinstance(parsed, dict):
+					return [parsed]
+			except Exception:
+				return []
+		return []
+
+	if field_type == "number":
+		return _to_wan_yuan(value)
+
+	if field_type == "boolean":
+		if isinstance(value, bool):
+			return value
+		s = str(value).strip().lower()
+		return s in {"true", "1", "yes", "是"}
+
+	# string
+	text = "" if value is None else str(value).strip()
+	if key in {"announcementDate", "updateDate", "bidOpenDate"}:
+		return normalize_date_ymd(text)
+	if key == "estimatedAmount":
+		return normalize_estimated_amount(text)
+	return text
 
 
 async def click_show_full_info(browser_session) -> bool:
@@ -685,15 +858,40 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 					error="截图失败"
 				)
 
-			# 5. 提取详情字段（如果提供了 llm）
-			extracted_fields = {}
+			# 5. 上传截图到 OSS（失败允许继续）
+			enable_oss_upload = os.getenv("ENABLE_OSS_UPLOAD", "").strip().lower() in {"1", "true", "yes", "on"}
+			if not enable_oss_upload:
+				# 本地测试模式：不上传 OSS，仍保存本地截图文件
+				image_url = "default"
+			else:
+				image_url = ""
+				try:
+					img_bytes = base64.b64decode(screenshot_base64)
+					image_url = OSSClient().upload(img_bytes, site_name)
+				except Exception as oss_err:
+					logger.warning(f"[{site_name}] OSS 上传失败: {oss_err}")
+					image_url = ""
+
+			# 6. 两次提取：flat + lots（如果提供了 llm）
+			flat_fields: dict = {}
+			lot_fields: dict = {"lotProducts": [], "lotCandidates": []}
 			if llm is not None:
-				extracted_fields = await extract_fields_from_page(browser_session, llm, site_name)
+				flat_fields = await extract_fields_from_page(browser_session, llm, site_name, stage="flat")
+				lot_fields = await extract_fields_from_page(browser_session, llm, site_name, stage="lots")
 
-			# 6. 生成唯一文件名
-			filename = get_unique_filename(output_dir, title, date)
+			# 兜底：确保数组字段存在
+			lot_products = lot_fields.get("lotProducts") or []
+			lot_candidates = lot_fields.get("lotCandidates") or []
+			if not isinstance(lot_products, list):
+				lot_products = []
+			if not isinstance(lot_candidates, list):
+				lot_candidates = []
 
-			# 7. 保存截图
+			# 7. 生成唯一文件名（使用列表页日期做文件分组）
+			file_date = normalize_date_ymd(date) or str(date).replace("/", "-").replace(".", "-")
+			filename = get_unique_filename(output_dir, title, file_date)
+
+			# 8. 保存本地截图（调试用）
 			png_path = output_dir / f"{filename}.png"
 			if not save_screenshot(screenshot_base64, png_path):
 				return ActionResult(
@@ -703,33 +901,38 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 
 			logger.info(f"[{site_name}] ✓ 截图已保存: {png_path.name}")
 
-			# 8. 保存JSON元数据（合并提取的字段）
-			json_data = {
-				"title": title,
-				"date": date,
-				"screenshot_path": f"{filename}.png",
-				"captured_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-				"source_website": site_name,
-				"detail_url": detail_url,
-				**extracted_fields  # 合并提取的字段
+			# 9. 组装最终返回结构（V2）
+			result_data = {
+				# 代码字段（强制覆盖）
+				"imagePath": image_url,
+				"announcementUrl": detail_url,
+				"announcementName": title,
+
+				# LLM 字段
+				**flat_fields,
+
+				# 标段数组字段（LLM）
+				"lotProducts": lot_products,
+				"lotCandidates": lot_candidates,
 			}
+
+			# announcementDate：详情页优先，取不到用列表页兜底
+			if not result_data.get("announcementDate"):
+				result_data["announcementDate"] = normalize_date_ymd(date) or date
+
+			# 公告类别归一化（13 选 1）
+			result_data["announcementType"] = normalize_announcement_type(result_data.get("announcementType"))
 
 			json_path = output_dir / f"{filename}.json"
 			with open(json_path, 'w', encoding='utf-8') as f:
-				json.dump(json_data, f, ensure_ascii=False, indent=2)
+				json.dump(result_data, f, ensure_ascii=False, indent=2)
 
 			logger.info(f"[{site_name}] ✓ 元数据已保存: {json_path.name}")
-
-			# 统计提取了多少字段
-			extracted_count = len([v for v in extracted_fields.values() if v])
-			total_fields = len(extracted_fields)
-			if total_fields > 0:
-				logger.info(f"[{site_name}] ✓ 提取字段: {extracted_count}/{total_fields} 个有值")
 
 			# 调用回调发送 item 数据到 SSE
 			if on_item_saved:
 				try:
-					on_item_saved(json_data)
+					on_item_saved(result_data)
 				except Exception as cb_err:
 					logger.warning(f"[{site_name}] 回调执行失败: {cb_err}")
 

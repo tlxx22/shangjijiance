@@ -37,3 +37,7 @@ Thumbs.db
 
 #docker
 shangjijiance-api.tar
+
+# 测试文件
+test*.py
+test*.json

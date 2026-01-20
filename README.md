@@ -88,6 +88,12 @@ curl -X POST http://localhost:8000/crawl \
 | 变量 | 说明 |
 |------|------|
 | BROWSER_USE_API_KEY | browser-use API 密钥（必填） |
+| ENABLE_OSS_UPLOAD | 是否开启 OSS 上传（`true/false`，默认关闭） |
+| OSS_ACCESS_KEY_ID | OSS AccessKeyId（截图上传用） |
+| OSS_ACCESS_KEY_SECRET | OSS AccessKeySecret（截图上传用） |
+| OSS_ENDPOINT | OSS Endpoint（如 `oss-cn-shanghai.aliyuncs.com`） |
+| OSS_BUCKET | OSS Bucket 名称 |
+| OSS_CDN_DOMAIN | 可选：自定义访问域名（CDN 或 bucket 域名） |
 
 ### prompts/ 目录
 
