@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import Dict
@@ -16,6 +17,26 @@ from .list_processor import process_entire_site
 from .logger_config import get_logger
 
 logger = get_logger()
+
+DEFAULT_HEADLESS_USER_AGENT = (
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+	"AppleWebKit/537.36 (KHTML, like Gecko) "
+	"Chrome/122.0.0.0 Safari/537.36"
+)
+
+
+def get_browser_user_agent(headless: bool) -> str | None:
+	"""
+	部分站点会对 headless UA（包含 'HeadlessChrome'）返回空白/错误页面。
+	因此在 headless 模式下默认使用一个非 Headless 的 UA，并允许通过环境变量覆盖。
+	"""
+	override = os.getenv("BROWSER_USER_AGENT")
+	if override:
+		return override.strip()
+
+	if headless:
+		return DEFAULT_HEADLESS_USER_AGENT
+	return None
 
 
 async def get_iframe_url(browser, llm, site_name: str) -> str:
@@ -292,8 +313,10 @@ async def process_site(
 			# 创建浏览器实例（如果外部未传入）
 			if browser is None:
 				logger.info(f"[{site_name}] 正在创建浏览器实例...")
+				user_agent = get_browser_user_agent(headless=headless)
 				browser = Browser(
 					headless=headless,
+					user_agent=user_agent,
 					keep_alive=True,
 					auto_download_pdfs=False,
 					enable_default_extensions=False,
