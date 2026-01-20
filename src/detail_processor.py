@@ -472,7 +472,8 @@ async def click_title_to_detail(browser, llm, title: str, site_name: str, pre_ex
 				task=f"请使用navigate工具访问这个URL: {pre_extracted_url}",
 				llm=llm,
 				browser=browser,
-				max_steps=2
+				max_steps=2,
+				step_timeout=240,
 			)
 			await nav_agent.run()
 			await asyncio.sleep(2)
@@ -498,7 +499,8 @@ async def click_title_to_detail(browser, llm, title: str, site_name: str, pre_ex
 			""",
 			llm=llm,
 			browser=browser,
-			max_steps=5
+			max_steps=5,
+			step_timeout=240,
 		)
 
 		await agent.run()

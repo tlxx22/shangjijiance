@@ -209,7 +209,8 @@ async def process_entire_site(
 			tools=tools,
 			output_model_schema=ProcessResult,
 			extend_system_message=GLOBAL_RULES,
-			max_steps=max_steps
+			max_steps=max_steps,
+			step_timeout=240,
 		)
 
 		result = await agent.run()
@@ -399,7 +400,8 @@ async def process_all_page_items(
 			llm=llm,
 			browser=browser,
 			tools=tools,
-			max_steps=max_items_per_page * 8  # 每个条目大约需要8步：滚动+点击+switch+等待+save_detail+close+返回列表+下一个
+			max_steps=max_items_per_page * 8,  # 每个条目大约需要8步：滚动+点击+switch+等待+save_detail+close+返回列表+下一个
+			step_timeout=240,
 		)
 
 		result = await agent.run()
@@ -537,7 +539,8 @@ async def find_and_click_next_item(
 			task=task,
 			llm=llm,
 			browser=browser,
-			max_steps=3  # 滚动(1) + 点击(1) + 返回(1)，无翻页余地
+			max_steps=3,  # 滚动(1) + 点击(1) + 返回(1)，无翻页余地
+			step_timeout=240,
 		)
 
 		result = await agent.run()
@@ -649,7 +652,8 @@ async def goto_next_page(browser, llm, site_name: str, current_page: int) -> boo
 			""",
 			llm=llm,
 			browser=browser,
-			max_steps=3
+			max_steps=3,
+			step_timeout=240,
 		)
 
 		await agent.run()
@@ -766,7 +770,8 @@ async def analyze_and_filter_page(
 			task=task,
 			llm=llm,
 			browser=browser,
-			max_steps=8
+			max_steps=8,
+			step_timeout=240,
 		)
 
 		result = await agent.run()

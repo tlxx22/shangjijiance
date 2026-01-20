@@ -581,10 +581,11 @@ async def extract_fields_from_page(browser_session, llm, site_name: str, stage: 
 - 日期字段格式为 YYYY-MM-DD（如 2026-02-16）
 - 只返回 JSON，不要解释、不要代码块
 - 不要执行任何点击或导航操作，只读取当前页面
-""",
+			""",
 			llm=llm,
 			browser=browser_session,
 			max_steps=2,
+			step_timeout=240,
 		)
 
 		result = await extract_agent.run()

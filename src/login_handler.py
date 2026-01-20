@@ -44,7 +44,8 @@ async def smart_login(site_config: SiteConfig, browser, llm) -> bool:
 		""",
 		llm=llm,
 		browser=browser,
-		max_steps=3
+		max_steps=3,
+		step_timeout=240,
 	)
 
 	try:
@@ -144,7 +145,8 @@ async def auto_login(site_config: SiteConfig, browser, llm) -> bool:
 				llm=llm,
 				browser=browser,
 				use_vision=True,  # 启用vision用于验证码识别
-				max_steps=10
+				max_steps=10,
+				step_timeout=240,
 			)
 
 			result = await login_agent.run()
