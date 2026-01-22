@@ -1,0 +1,41 @@
+flowchart TD
+    A[开始处理网站] --> B[创建浏览器实例]
+    B --> C[访问列表页 URL]
+    C --> D[smart_login: 登录/页面状态检测]
+    D -->|失败| X1[❌ 返回失败: 需要登录/页面异常]
+    
+    D -->|成功| E[🛡️ 安全检查1: check_page_security]
+    E -->|unsafe| X2[❌ 返回失败: 风控/验证码]
+    
+    E -->|safe| F[检测 iframe URL]
+    F -->|有 iframe| G[导航到 iframe URL]
+    F -->|无 iframe| I
+    
+    G --> H[🛡️ 安全检查2: check_page_security]
+    H -->|unsafe| X3[❌ 返回失败: iframe 页面风控]
+    H -->|safe| I
+    
+    I[检测更多按钮并进入列表页]
+    I -->|失败| X4[❌ 返回失败]
+    
+    I -->|成功| J[process_entire_site: 主处理循环]
+    J --> K[LLM 扫描列表页条目]
+    K --> L{条目符合日期范围?}
+    L -->|是| M[点击进入详情页]
+    L -->|否| N[跳过/继续扫描]
+    
+    M --> O[🛡️ 安全检查3: 详情页检查]
+    O -->|unsafe| P[关闭标签页返回列表]
+    O -->|safe| Q[截图 + 字段提取]
+    
+    Q --> R[上传 OSS + 保存 JSON]
+    R --> S[回调 on_item_saved]
+    S --> T[关闭详情页标签]
+    T --> N
+    
+    N --> U{还有更多条目?}
+    U -->|是| K
+    U -->|否| V{需要翻页?}
+    V -->|是| W[翻到下一页]
+    W --> K
+    V -->|否| Z[✅ 返回成功结果]

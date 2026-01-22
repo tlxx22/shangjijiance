@@ -643,8 +643,9 @@ async def extract_fields_from_page(browser_session, llm, site_name: str, stage: 
 
 			# stage=lots 允许 LLM 直接返回数组，按内容推断属于哪个字段
 			if stage == "lots" and isinstance(extracted, list):
+				candidate_marker_keys = {"candidates", "candidatePrices", "candidate_prices", "winner", "winningAmount", "winning_amount"}
 				has_candidate_keys = any(
-					isinstance(x, dict) and any(k in x for k in ("candidates", "candidatePrices", "winner"))
+					isinstance(x, dict) and any(k in x for k in candidate_marker_keys)
 					for x in extracted
 				)
 				extracted = {

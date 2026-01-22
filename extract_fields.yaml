@@ -48,12 +48,6 @@ fields:
     stage: flat
     hint: 数字，单位：万元（保留两位小数）。若页面为元/亿需换算到万元
 
-  - key: winningAmount
-    name: 中标金额
-    type: number
-    stage: flat
-    hint: 数字，单位：万元（保留两位小数）。中标候选人公告取第一名报价（如有）
-
   - key: estimatedAmount
     name: 预估金额
     type: string
@@ -142,11 +136,11 @@ fields:
       {
         "lotNumber": "标段一/标段二/...",
         "lotName": "标段名称（如有）",
-        "subjects": "标的物，多个用逗号分隔",
-        "productCategory": "二级产品（如有，多个用逗号分隔）",
-        "models": "型号，多个用逗号分隔",
-        "unitPrices": "单价（万元，两位小数），多个用逗号分隔",
-        "quantities": "数量（正整数），多个用逗号分隔"
+        "subjects": ["标的物（一个或多个）"],
+        "productCategory": ["二级产品（如有，一个或多个）"],
+        "models": ["型号（一个或多个）"],
+        "unitPrices": ["单价（万元，两位小数，一个或多个）"],
+        "quantities": ["数量（正整数，一个或多个）"]
       }
 
       重要规则：
@@ -162,9 +156,10 @@ fields:
       {
         "lotNumber": "标段一/标段二/...",
         "lotName": "标段名称（如有）",
-        "candidates": "候选单位，多个用逗号分隔（按名次从高到低）",
-        "candidatePrices": "候选单位报价（万元，两位小数），多个用逗号分隔（按名次排列）",
-        "winner": "中标单位（如有）"
+        "candidates": ["候选单位（按名次从高到低，一个或多个）"],
+        "candidatePrices": ["候选单位报价（万元，两位小数，按名次排列，一个或多个）"],
+        "winner": "中标单位（如有）",
+        "winningAmount": 123.45
       }
 
       重要规则：

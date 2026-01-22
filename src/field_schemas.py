@@ -247,6 +247,81 @@ def _normalize_int_list_str(v: Any) -> str:
 	return ",".join(out)
 
 
+def _to_str_list(v: Any) -> list[str]:
+	"""
+	将输入归一化为字符串数组。
+
+	容错：
+	- "A,B" / "A，B" / "A\\nB" -> ["A","B"]
+	- ["A","B"] -> ["A","B"]
+	- '[\"A\",\"B\"]' -> ["A","B"]
+	"""
+	if v is None:
+		return []
+
+	if isinstance(v, list):
+		out: list[str] = []
+		for x in v:
+			out.extend(_to_str_list(x))
+		return out
+
+	if isinstance(v, str):
+		s = v.strip()
+		if not s or s.lower() in _EMPTY_STRINGS:
+			return []
+
+		# 允许字符串形式的 JSON 数组/对象（尽量容错）
+		if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
+			try:
+				parsed = json.loads(s)
+				return _to_str_list(parsed)
+			except Exception:
+				pass
+
+		parts = [p.strip() for p in re.split(_SEP, s) if p.strip()]
+		return [p for p in parts if p.lower() not in _EMPTY_STRINGS]
+
+	s = str(v).strip()
+	if not s or s.lower() in _EMPTY_STRINGS:
+		return []
+	return [s]
+
+
+def _normalize_price_list(v: Any) -> list[str]:
+	"""
+	将 \"100万,200万\" / [100,200] 归一化为 [\"100.00\",\"200.00\"]（万元）
+	"""
+	parts = _to_str_list(v)
+	out: list[str] = []
+	for p in parts:
+		val = _to_wan_yuan(p)
+		out.append(f"{val:.2f}" if val is not None else p)
+	return out
+
+
+def _normalize_int_list(v: Any) -> list[str]:
+	parts = _to_str_list(v)
+	out: list[str] = []
+	for p in parts:
+		m = re.search(r"\d+", p)
+		if m:
+			out.append(str(int(m.group())))
+		else:
+			out.append(p)
+	return out
+
+
+def _normalize_wan_yuan_number(v: Any) -> Optional[float]:
+	"""
+	容错地从标量/列表/逗号分隔字符串中提取一个金额（万元）。
+	"""
+	for part in _to_str_list(v):
+		val = _to_wan_yuan(part)
+		if val is not None:
+			return val
+	return _to_wan_yuan(v)
+
+
 # ===== lotProducts =====
 
 class LotProduct(BaseModel):
@@ -256,11 +331,11 @@ class LotProduct(BaseModel):
 
 	lotNumber: str = Field(default="标段一", validation_alias=AliasChoices("lotNumber", "标段号", "lot_number"))
 	lotName: str = Field(default="", validation_alias=AliasChoices("lotName", "标段名", "lot_name"))
-	subjects: str = Field(default="", validation_alias=AliasChoices("subjects", "标的物"))
-	productCategory: str = Field(default="", validation_alias=AliasChoices("productCategory", "二级产品"))
-	models: str = Field(default="", validation_alias=AliasChoices("models", "标的物型号", "型号"))
-	unitPrices: str = Field(default="", validation_alias=AliasChoices("unitPrices", "标的物单价", "单价"))
-	quantities: str = Field(default="", validation_alias=AliasChoices("quantities", "标的物数量", "数量"))
+	subjects: list[str] = Field(default_factory=list, validation_alias=AliasChoices("subjects", "标的物"))
+	productCategory: list[str] = Field(default_factory=list, validation_alias=AliasChoices("productCategory", "二级产品"))
+	models: list[str] = Field(default_factory=list, validation_alias=AliasChoices("models", "标的物型号", "型号"))
+	unitPrices: list[str] = Field(default_factory=list, validation_alias=AliasChoices("unitPrices", "标的物单价", "单价"))
+	quantities: list[str] = Field(default_factory=list, validation_alias=AliasChoices("quantities", "标的物数量", "数量"))
 
 	@field_validator("lotNumber", mode="before")
 	@classmethod
@@ -269,20 +344,25 @@ class LotProduct(BaseModel):
 		text = _join_list(v)
 		return text or "标段一"
 
-	@field_validator("lotName", "subjects", "productCategory", "models", mode="before")
+	@field_validator("lotName", mode="before")
 	@classmethod
 	def _strip_text(cls, v: Any) -> str:
 		return _join_list(v)
 
 	@field_validator("unitPrices", mode="before")
 	@classmethod
-	def _unit_prices(cls, v: Any) -> str:
-		return _normalize_price_list_str(v)
+	def _unit_prices(cls, v: Any) -> list[str]:
+		return _normalize_price_list(v)
 
 	@field_validator("quantities", mode="before")
 	@classmethod
-	def _quantities(cls, v: Any) -> str:
-		return _normalize_int_list_str(v)
+	def _quantities(cls, v: Any) -> list[str]:
+		return _normalize_int_list(v)
+
+	@field_validator("subjects", "productCategory", "models", mode="before")
+	@classmethod
+	def _text_list(cls, v: Any) -> list[str]:
+		return _to_str_list(v)
 
 
 class LotProducts(RootModel[list[LotProduct]]):
@@ -319,9 +399,13 @@ class LotCandidate(BaseModel):
 
 	lotNumber: str = Field(default="标段一", validation_alias=AliasChoices("lotNumber", "标段号", "lot_number"))
 	lotName: str = Field(default="", validation_alias=AliasChoices("lotName", "标段名", "lot_name"))
-	candidates: str = Field(default="", validation_alias=AliasChoices("candidates", "候选单位"))
-	candidatePrices: str = Field(default="", validation_alias=AliasChoices("candidatePrices", "候选单位报价", "报价"))
+	candidates: list[str] = Field(default_factory=list, validation_alias=AliasChoices("candidates", "候选单位"))
+	candidatePrices: list[str] = Field(default_factory=list, validation_alias=AliasChoices("candidatePrices", "候选单位报价", "报价"))
 	winner: str = Field(default="", validation_alias=AliasChoices("winner", "中标单位", "成交单位"))
+	winningAmount: Optional[float] = Field(
+		default=None,
+		validation_alias=AliasChoices("winningAmount", "中标金额", "成交金额", "中标价", "成交价"),
+	)
 
 	@field_validator("lotNumber", mode="before")
 	@classmethod
@@ -329,15 +413,25 @@ class LotCandidate(BaseModel):
 		text = _join_list(v)
 		return text or "标段一"
 
-	@field_validator("lotName", "candidates", "winner", mode="before")
+	@field_validator("lotName", "winner", mode="before")
 	@classmethod
 	def _strip_text(cls, v: Any) -> str:
 		return _join_list(v)
 
 	@field_validator("candidatePrices", mode="before")
 	@classmethod
-	def _candidate_prices(cls, v: Any) -> str:
-		return _normalize_price_list_str(v)
+	def _candidate_prices(cls, v: Any) -> list[str]:
+		return _normalize_price_list(v)
+
+	@field_validator("candidates", mode="before")
+	@classmethod
+	def _text_list(cls, v: Any) -> list[str]:
+		return _to_str_list(v)
+
+	@field_validator("winningAmount", mode="before")
+	@classmethod
+	def _winning_amount(cls, v: Any) -> Optional[float]:
+		return _normalize_wan_yuan_number(v)
 
 
 class LotCandidates(RootModel[list[LotCandidate]]):

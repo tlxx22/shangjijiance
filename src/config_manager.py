@@ -170,7 +170,7 @@ def generate_extract_prompt(fields: List[ExtractField], stage: str) -> str:
 		lines.append("- lotProducts/lotCandidates 必须返回数组；未提及则返回 []")
 		lines.append("- lotNumber 若页面未写明，填 \"标段一\"（不要留空）")
 		lines.append("- 若页面未明确拆分多个标段，但能识别到标的物/采购内容/候选报价信息，请以整页为一个标段对象输出（不要返回空数组）")
-		lines.append("- 单价/报价字段单位为“万元”，保留两位小数（多个用逗号分隔）")
+		lines.append("- 单价/报价字段单位为“万元”，保留两位小数；多个值请输出数组（如 [\"97.00\",\"98.50\"]），不要用逗号拼接字符串")
 		lines.append("")
 
 	for i, field in enumerate(fields, 1):

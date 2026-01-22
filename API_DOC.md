@@ -107,13 +107,14 @@ data: {"type":"start","request_id":"a1b2c3d4","site_name":"安能招投标平台
 每抓取到一条详情页数据立即发送。
 
 ```json
-data: {"type":"item","request_id":"a1b2c3d4","data":{"imagePath":"https://cdn.example.com/crawler/2026-01-19/网站名/143000123456.png","announcementUrl":"https://example.com/detail/123","announcementName":"某某项目招标公告","projectName":"某某项目","projectId":"CEZB250209959","announcementDate":"2026-01-19","updateDate":"2026-01-19","bidOpenDate":"2026-01-26","budgetAmount":500.0,"winningAmount":null,"estimatedAmount":"400.00~600.00","buyerAddress":"北京市朝阳区","buyerRegion":"北京市","projectAddress":"内蒙古鄂尔多斯市","projectRegion":"内蒙古","deliveryAddress":"内蒙古鄂尔多斯市XX煤矿","deliveryRegion":"内蒙古","buyerName":"国能（北京）跨境电商有限公司","buyerContact":"张三","buyerPhone":"010-12345678","agency":"国家能源集团国际工程咨询有限公司","announcementType":"招标","lotProducts":[{"lotNumber":"标段一","lotName":"三山岛金矿","subjects":"液压挖掘机","productCategory":"挖掘机","models":"XE490DK","unitPrices":"280.00","quantities":"2"}],"lotCandidates":[{"lotNumber":"标段一","lotName":"三山岛金矿","candidates":"A公司,B公司,C公司","candidatePrices":"97.00,98.50,99.00","winner":"A公司"}]}}
+data: {"type":"item","request_id":"a1b2c3d4","data":{"imagePath":"https://cdn.example.com/crawler/2026-01-19/网站名/143000123456.png","announcementUrl":"https://example.com/detail/123","announcementName":"某某项目招标公告","projectName":"某某项目","projectId":"CEZB250209959","announcementDate":"2026-01-19","updateDate":"2026-01-19","bidOpenDate":"2026-01-26","budgetAmount":500.0,"estimatedAmount":"400.00~600.00","buyerAddress":"北京市朝阳区","buyerRegion":"北京市","projectAddress":"内蒙古鄂尔多斯市","projectRegion":"内蒙古","deliveryAddress":"内蒙古鄂尔多斯市XX煤矿","deliveryRegion":"内蒙古","buyerName":"国能（北京）跨境电商有限公司","buyerContact":"张三","buyerPhone":"010-12345678","agency":"国家能源集团国际工程咨询有限公司","announcementType":"招标","lotProducts":[{"lotNumber":"标段一","lotName":"三山岛金矿","subjects":["液压挖掘机"],"productCategory":["挖掘机"],"models":["XE490DK"],"unitPrices":["280.00"],"quantities":["2"]}],"lotCandidates":[{"lotNumber":"标段一","lotName":"三山岛金矿","candidates":["A公司","B公司","C公司"],"candidatePrices":["97.00","98.50","99.00"],"winner":"A公司","winningAmount":97.0}]}}
 ```
 
 说明：
-- `budgetAmount` / `winningAmount` 单位为“万元”，保留两位小数；取不到填 `null`
+- `budgetAmount` / `lotCandidates[].winningAmount` 单位为“万元”，保留两位小数；取不到填 `null`
 - `estimatedAmount` 格式为 `"下限~上限"`（万元，两位小数）；取不到填 `""`
 - `lotProducts` / `lotCandidates` 无内容时返回 `[]`
+- `lotProducts[].subjects/productCategory/models/unitPrices/quantities` 与 `lotCandidates[].candidates/candidatePrices` 始终返回数组（单值也用数组）
 
 ---
 
