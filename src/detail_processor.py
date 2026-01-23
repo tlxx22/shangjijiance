@@ -253,7 +253,7 @@ async def go_back_cdp(browser, site_name: str) -> bool:
 		return False
 
 
-async def cleanup_extra_tabs(browser, site_name: str, expected_list_url: str = None) -> bool:
+async def cleanup_extra_tabs(browser, site_name: str, expected_list_url: str | None = None) -> bool:
 	"""
 	清理多余的标签页，只保留列表页
 

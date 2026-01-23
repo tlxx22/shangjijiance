@@ -103,8 +103,8 @@ async def process_entire_site(
 	max_pages: int = 5,
 	max_items_per_page: int = 10,
 	on_item_saved=None,
-	date_start: str = None,
-	date_end: str = None
+	date_start: str | None = None,
+	date_end: str | None = None
 ) -> Dict:
 	"""
 	单个 Agent 处理整个网站的所有页面

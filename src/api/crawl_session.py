@@ -38,8 +38,8 @@ class CrawlSession:
         request_id: str,
         max_pages: int = 3,
         headless: bool = True,
-        date_start: str = None,
-        date_end: str = None,
+        date_start: str | None = None,
+        date_end: str | None = None,
     ):
         """
         启动后台爬虫任务
@@ -61,8 +61,8 @@ class CrawlSession:
         request_id: str,
         max_pages: int,
         headless: bool,
-        date_start: str,
-        date_end: str,
+        date_start: str | None,
+        date_end: str | None,
     ):
         """
         后台爬虫任务，推送事件到队列

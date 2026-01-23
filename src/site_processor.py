@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict
 from browser_use import Browser, BrowserSession, Agent
-from browser_use.llm.browser_use import ChatBrowserUse
+from trans import build_llm
 
 from .config_manager import SiteConfig, get_user_data_dir
 from .login_handler import smart_login
@@ -258,13 +258,13 @@ async def enter_list_page(browser, llm, site_name: str) -> bool:
 async def process_site(
 	site_config: SiteConfig,
 	filter_prompt: str,
-	browser: Browser = None,
+	browser: Browser | None = None,
 	headless: bool = False,
 	max_pages: int = 5,
 	max_retries: int = 3,
 	on_item_saved=None,
-	date_start: str = None,
-	date_end: str = None
+	date_start: str | None = None,
+	date_end: str | None = None
 ) -> Dict:
 	"""
 	处理单个网站
@@ -302,7 +302,7 @@ async def process_site(
 	output_dir.mkdir(parents=True, exist_ok=True)
 
 	# 初始化LLM
-	llm = ChatBrowserUse(model="bu-30b-a3b-preview")
+	llm = build_llm()
 
 	# 标记浏览器是否由本函数创建（用于决定是否关闭）
 	browser_created_here = browser is None
