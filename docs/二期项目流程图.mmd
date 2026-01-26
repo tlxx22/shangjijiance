@@ -28,14 +28,14 @@ flowchart TB
         SCAN["扫描列表页<br/>AI理解标题含义"]
         DECIDE{"符合条件?"}
         CLICK["点击进入详情页"]
-        DETAIL["详情页处理<br/>展开信息 + 截图"]
+        DETAIL["详情页处理<br/>展开信息 + 公告原文(MD)"]
         EXTRACT["AI提取字段"]
         BACK["关闭标签页<br/>返回列表"]
         NEXT["翻页继续"]
     end
 
     subgraph 存储["数据存储层"]
-        OUTPUT["输出文件<br/>PNG截图 + JSON元数据"]
+        OUTPUT["输出文件<br/>JSON（含公告原文MD）"]
     end
 
     %% 主流程

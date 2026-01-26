@@ -15,6 +15,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field, RootModel, AliasChoices, field_validator, model_validator
 
 from .logger_config import get_logger
+from .concrete_product_table import match_concrete_product_from_subject, normalize_concrete_product_name
 
 logger = get_logger()
 
@@ -331,11 +332,11 @@ class LotProduct(BaseModel):
 
 	lotNumber: str = Field(default="标段一", validation_alias=AliasChoices("lotNumber", "标段号", "lot_number"))
 	lotName: str = Field(default="", validation_alias=AliasChoices("lotName", "标段名", "lot_name"))
-	subjects: list[str] = Field(default_factory=list, validation_alias=AliasChoices("subjects", "标的物"))
-	productCategory: list[str] = Field(default_factory=list, validation_alias=AliasChoices("productCategory", "二级产品"))
-	models: list[str] = Field(default_factory=list, validation_alias=AliasChoices("models", "标的物型号", "型号"))
-	unitPrices: list[str] = Field(default_factory=list, validation_alias=AliasChoices("unitPrices", "标的物单价", "单价"))
-	quantities: list[str] = Field(default_factory=list, validation_alias=AliasChoices("quantities", "标的物数量", "数量"))
+	subjects: str = Field(default="", validation_alias=AliasChoices("subjects", "标的物"))
+	productCategory: str = Field(default="", validation_alias=AliasChoices("productCategory", "二级产品"))
+	models: str = Field(default="", validation_alias=AliasChoices("models", "标的物型号", "型号"))
+	unitPrices: str = Field(default="", validation_alias=AliasChoices("unitPrices", "标的物单价", "单价"))
+	quantities: str = Field(default="", validation_alias=AliasChoices("quantities", "标的物数量", "数量"))
 
 	@field_validator("lotNumber", mode="before")
 	@classmethod
@@ -351,43 +352,97 @@ class LotProduct(BaseModel):
 
 	@field_validator("unitPrices", mode="before")
 	@classmethod
-	def _unit_prices(cls, v: Any) -> list[str]:
-		return _normalize_price_list(v)
+	def _unit_prices(cls, v: Any) -> str:
+		parts = _normalize_price_list(v)
+		return parts[0] if parts else ""
 
 	@field_validator("quantities", mode="before")
 	@classmethod
-	def _quantities(cls, v: Any) -> list[str]:
-		return _normalize_int_list(v)
+	def _quantities(cls, v: Any) -> str:
+		parts = _normalize_int_list(v)
+		return parts[0] if parts else ""
 
 	@field_validator("subjects", "productCategory", "models", mode="before")
 	@classmethod
-	def _text_list(cls, v: Any) -> list[str]:
-		return _to_str_list(v)
+	def _text_single(cls, v: Any) -> str:
+		parts = _to_str_list(v)
+		return parts[0] if parts else ""
 
 
 class LotProducts(RootModel[list[LotProduct]]):
 	@model_validator(mode="before")
 	@classmethod
 	def _normalize(cls, v: Any):
-		if v is None:
+		def _as_list(raw: Any) -> list[dict]:
+			if raw is None:
+				return []
+			if isinstance(raw, list):
+				return [x for x in raw if isinstance(x, dict)]
+			if isinstance(raw, dict):
+				return [raw]
+			if isinstance(raw, str):
+				s = raw.strip()
+				if s.lower() in _EMPTY_STRINGS:
+					return []
+				try:
+					parsed = json.loads(s)
+					return _as_list(parsed)
+				except Exception:
+					return []
 			return []
-		if isinstance(v, list):
-			return v
-		if isinstance(v, dict):
-			return [v]
-		if isinstance(v, str):
-			s = v.strip()
-			if s.lower() in _EMPTY_STRINGS:
-				return []
-			try:
-				parsed = json.loads(s)
-				if isinstance(parsed, list):
-					return parsed
-				if isinstance(parsed, dict):
-					return [parsed]
-			except Exception:
-				return []
-		return []
+
+		def _pick(parts: list[str], idx: int) -> str:
+			if not parts:
+				return ""
+			if len(parts) == 1:
+				return parts[0]
+			return parts[idx] if idx < len(parts) else ""
+
+		items = _as_list(v)
+		out: list[dict] = []
+		for item in items:
+			lot_number = _join_list(item.get("lotNumber")) or "标段一"
+			lot_name = _join_list(item.get("lotName"))
+
+			subjects = _to_str_list(item.get("subjects"))
+			product_categories = _to_str_list(item.get("productCategory"))
+			models = _to_str_list(item.get("models"))
+			unit_prices = _normalize_price_list(item.get("unitPrices"))
+			quantities = _normalize_int_list(item.get("quantities"))
+
+			row_count = max(
+				len(subjects),
+				len(product_categories),
+				len(models),
+				len(unit_prices),
+				len(quantities),
+			)
+			if row_count <= 0:
+				continue
+
+			for idx in range(row_count):
+				subject_value = _pick(subjects, idx)
+				product_category_value = _pick(product_categories, idx)
+				if product_category_value:
+					product_category_value = normalize_concrete_product_name(product_category_value) or match_concrete_product_from_subject(
+						subject_value
+					)
+				else:
+					product_category_value = match_concrete_product_from_subject(subject_value)
+
+				out.append(
+					{
+						"lotNumber": lot_number,
+						"lotName": lot_name,
+						"subjects": subject_value,
+						"productCategory": product_category_value,
+						"models": _pick(models, idx),
+						"unitPrices": _pick(unit_prices, idx),
+						"quantities": _pick(quantities, idx),
+					}
+				)
+
+		return out
 
 
 # ===== lotCandidates =====
@@ -399,8 +454,8 @@ class LotCandidate(BaseModel):
 
 	lotNumber: str = Field(default="标段一", validation_alias=AliasChoices("lotNumber", "标段号", "lot_number"))
 	lotName: str = Field(default="", validation_alias=AliasChoices("lotName", "标段名", "lot_name"))
-	candidates: list[str] = Field(default_factory=list, validation_alias=AliasChoices("candidates", "候选单位"))
-	candidatePrices: list[str] = Field(default_factory=list, validation_alias=AliasChoices("candidatePrices", "候选单位报价", "报价"))
+	candidates: str = Field(default="", validation_alias=AliasChoices("candidates", "候选单位"))
+	candidatePrices: str = Field(default="", validation_alias=AliasChoices("candidatePrices", "候选单位报价", "报价"))
 	winner: str = Field(default="", validation_alias=AliasChoices("winner", "中标单位", "成交单位"))
 	winningAmount: Optional[float] = Field(
 		default=None,
@@ -420,13 +475,15 @@ class LotCandidate(BaseModel):
 
 	@field_validator("candidatePrices", mode="before")
 	@classmethod
-	def _candidate_prices(cls, v: Any) -> list[str]:
-		return _normalize_price_list(v)
+	def _candidate_prices(cls, v: Any) -> str:
+		parts = _normalize_price_list(v)
+		return parts[0] if parts else ""
 
 	@field_validator("candidates", mode="before")
 	@classmethod
-	def _text_list(cls, v: Any) -> list[str]:
-		return _to_str_list(v)
+	def _text_single(cls, v: Any) -> str:
+		parts = _to_str_list(v)
+		return parts[0] if parts else ""
 
 	@field_validator("winningAmount", mode="before")
 	@classmethod
@@ -438,22 +495,58 @@ class LotCandidates(RootModel[list[LotCandidate]]):
 	@model_validator(mode="before")
 	@classmethod
 	def _normalize(cls, v: Any):
-		if v is None:
+		def _as_list(raw: Any) -> list[dict]:
+			if raw is None:
+				return []
+			if isinstance(raw, list):
+				return [x for x in raw if isinstance(x, dict)]
+			if isinstance(raw, dict):
+				return [raw]
+			if isinstance(raw, str):
+				s = raw.strip()
+				if s.lower() in _EMPTY_STRINGS:
+					return []
+				try:
+					parsed = json.loads(s)
+					return _as_list(parsed)
+				except Exception:
+					return []
 			return []
-		if isinstance(v, list):
-			return v
-		if isinstance(v, dict):
-			return [v]
-		if isinstance(v, str):
-			s = v.strip()
-			if s.lower() in _EMPTY_STRINGS:
-				return []
-			try:
-				parsed = json.loads(s)
-				if isinstance(parsed, list):
-					return parsed
-				if isinstance(parsed, dict):
-					return [parsed]
-			except Exception:
-				return []
-		return []
+
+		def _pick(parts: list[str], idx: int) -> str:
+			if not parts:
+				return ""
+			if len(parts) == 1:
+				return parts[0]
+			return parts[idx] if idx < len(parts) else ""
+
+		items = _as_list(v)
+		out: list[dict] = []
+		for item in items:
+			lot_number = _join_list(item.get("lotNumber")) or "标段一"
+			lot_name = _join_list(item.get("lotName"))
+			winner = _join_list(item.get("winner"))
+			winning_amount = _normalize_wan_yuan_number(item.get("winningAmount"))
+
+			candidates = _to_str_list(item.get("candidates"))
+			candidate_prices = _normalize_price_list(item.get("candidatePrices"))
+
+			row_count = max(len(candidates), len(candidate_prices))
+			keep_one = row_count > 0 or bool(winner) or (winning_amount is not None)
+			if not keep_one:
+				continue
+			if row_count <= 0:
+				row_count = 1
+
+			for idx in range(row_count):
+				out.append(
+					{
+						"lotNumber": lot_number,
+						"lotName": lot_name,
+						"candidates": _pick(candidates, idx),
+						"candidatePrices": _pick(candidate_prices, idx),
+						"winner": winner,
+						"winningAmount": winning_amount,
+					}
+				)
+		return out

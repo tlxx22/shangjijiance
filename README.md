@@ -1,6 +1,6 @@
 # 商机监测爬虫 API
 
-基于 browser-use 的 AI 驱动招投标信息自动监测系统。提供 **SSE 流式 HTTP API**，自动访问招投标网站，智能筛选符合条件的招标信息，并完整截图保存。
+基于 browser-use 的 AI 驱动招投标信息自动监测系统。提供 **SSE 流式 HTTP API**，自动访问招投标网站，智能筛选符合条件的招标信息，并抓取公告原文（Markdown）保存。
 
 ## 功能特点
 
@@ -88,12 +88,7 @@ curl -X POST http://localhost:8000/crawl \
 | 变量 | 说明 |
 |------|------|
 | BROWSER_USE_API_KEY | browser-use API 密钥（必填） |
-| ENABLE_OSS_UPLOAD | 是否开启 OSS 上传（`true/false`，默认关闭） |
-| OSS_ACCESS_KEY_ID | OSS AccessKeyId（截图上传用） |
-| OSS_ACCESS_KEY_SECRET | OSS AccessKeySecret（截图上传用） |
-| OSS_ENDPOINT | OSS Endpoint（如 `oss-cn-shanghai.aliyuncs.com`） |
-| OSS_BUCKET | OSS Bucket 名称 |
-| OSS_CDN_DOMAIN | 可选：自定义访问域名（CDN 或 bucket 域名） |
+| BROWSER_USER_AGENT | 可选：统一覆盖浏览器 UA（对 headless/headful 都生效） |
 
 ### prompts/ 目录
 
@@ -118,8 +113,7 @@ Gunicorn 配置文件，关键参数：
 output/
 └── 2026-01-09/
     └── 网站名称/
-        ├── 项目A_2026-01-09.png   # 详情页截图
-        └── 项目A_2026-01-09.json  # 元数据
+        └── 项目A_2026-01-09.json  # 结构化数据（含公告原文 Markdown：announcementContentMd）
 ```
 
 ## 日志

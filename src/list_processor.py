@@ -1,7 +1,7 @@
 """
 列表页处理模块
 边扫描边处理：发现符合条件的条目立即点击处理
-使用自定义工具让Agent自行完成截图和保存
+使用自定义工具让Agent自行完成公告原文(MD)提取和保存
 """
 
 import json
@@ -27,17 +27,17 @@ class ProcessResult(BaseModel):
 
 def count_saved_files(output_dir: Path) -> int:
 	"""
-	统计输出目录中已保存的 PNG 文件数量
+	统计输出目录中已保存的 JSON 文件数量
 
 	Args:
 		output_dir: 输出目录路径
 
 	Returns:
-		PNG 文件数量
+		JSON 文件数量
 	"""
 	if not output_dir.exists():
 		return 0
-	return len(list(output_dir.glob("*.png")))
+	return len(list(output_dir.glob("*.json")))
 
 
 def save_analysis_log(result, output_dir: Path, site_name: str) -> None:
@@ -368,13 +368,13 @@ async def process_all_page_items(
 2. **记录信息**：提取该条目的【完整标题】和【发布日期】（格式 YYYY-MM-DD）
 3. **点击打开**：点击该条目的标题链接（会在新标签页打开）
 4. **切换标签**：使用 `switch` 动作切换到新打开的详情页标签
-5. **保存截图**：调用 `save_detail` 工具，传入标题和日期参数
+5. **保存详情**：调用 `save_detail` 工具（抓取公告原文MD + 字段），传入标题和日期参数
 6. **关闭标签**：使用 `close` 动作关闭当前详情页标签（会自动回到列表页）
 7. **继续处理**：回到步骤1，寻找下一个符合条件的条目
 
 **⚠️ 重要提示：**
 - 每个条目【只点击一次】，不要重复点击同一个条目
-- 在详情页记得等待页面加载完成再截图
+- 在详情页记得等待页面加载完成再提取原文
 - 最多处理 {max_items_per_page} 个条目
 - 当前页面所有符合条件的条目都处理完后，用 done 返回结果
 

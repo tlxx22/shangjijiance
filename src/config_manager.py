@@ -169,8 +169,14 @@ def generate_extract_prompt(fields: List[ExtractField], stage: str) -> str:
 		lines.append("**额外规则：**")
 		lines.append("- lotProducts/lotCandidates 必须返回数组；未提及则返回 []")
 		lines.append("- lotNumber 若页面未写明，填 \"标段一\"（不要留空）")
-		lines.append("- 若页面未明确拆分多个标段，但能识别到标的物/采购内容/候选报价信息，请以整页为一个标段对象输出（不要返回空数组）")
-		lines.append("- 单价/报价字段单位为“万元”，保留两位小数；多个值请输出数组（如 [\"97.00\",\"98.50\"]），不要用逗号拼接字符串")
+		lines.append("- lotProducts：每个元素表示一条“标的物行”，subjects/models/unitPrices/quantities/productCategory 均为 string；如有多条标的物，输出多个元素（可复用相同 lotNumber/lotName）")
+		lines.append("- lotCandidates：每个元素表示一条“候选单位行”，candidates/candidatePrices 为 string；如有多家候选单位，输出多个元素（winner/winningAmount 可在每条重复）")
+		lines.append("- unitPrices/candidatePrices 单位为“万元”，保留两位小数；不要用逗号拼接多个值到同一个字段里")
+		lines.append("- productCategory：按“具体产品表”匹配 subjects，匹配到则填该行的标准名称（每行第一个词），匹配不到填 \"\"")
+		lines.append("")
+		lines.append("**具体产品表（用于 productCategory 匹配）**")
+		from .concrete_product_table import format_concrete_product_table_for_prompt
+		lines.append(format_concrete_product_table_for_prompt())
 		lines.append("")
 
 	for i, field in enumerate(fields, 1):

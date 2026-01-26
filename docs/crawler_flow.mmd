@@ -26,9 +26,9 @@ flowchart TD
     
     M --> O[🛡️ 安全检查3: 详情页检查]
     O -->|unsafe| P[关闭标签页返回列表]
-    O -->|safe| Q[截图 + 字段提取]
+    O -->|safe| Q[公告原文(MD) + 字段提取]
     
-    Q --> R[上传 OSS + 保存 JSON]
+    Q --> R[保存 JSON]
     R --> S[回调 on_item_saved]
     S --> T[关闭详情页标签]
     T --> N

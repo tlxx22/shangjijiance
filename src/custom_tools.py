@@ -1,15 +1,12 @@
 """
 自定义工具模块
-提供完整页面截图、文件名处理等工具函数
+提供公告原文(MD)提取、文件名处理等工具函数
 """
 
 import asyncio
-import base64
 import os
 from pathlib import Path
-from typing import Optional, Any
-from PIL import Image
-from io import BytesIO
+from typing import Any
 import re
 
 from browser_use import BrowserSession, ActionResult
@@ -72,20 +69,18 @@ def get_unique_filename(base_dir: Path, title: str, date: str) -> str:
 	base_filename = f"{safe_title}_{date}"
 
 	# 检查是否存在
-	png_path = base_dir / f"{base_filename}.png"
 	json_path = base_dir / f"{base_filename}.json"
 
-	if not png_path.exists() and not json_path.exists():
+	if not json_path.exists():
 		return base_filename
 
 	# 存在冲突，添加序号
 	counter = 2
 	while True:
 		new_filename = f"{base_filename}_{counter}"
-		png_path = base_dir / f"{new_filename}.png"
 		json_path = base_dir / f"{new_filename}.json"
 
-		if not png_path.exists() and not json_path.exists():
+		if not json_path.exists():
 			return new_filename
 
 		counter += 1
@@ -118,7 +113,7 @@ async def get_browser_session(browser) -> BrowserSession:
 	return browser
 
 
-async def capture_full_page_cdp(browser) -> Optional[str]:
+async def capture_full_page_cdp(browser) -> str | None:
 	"""
 	使用CDP原生方式截取完整页面（改进版：调整视口大小以匹配页面）
 
@@ -128,6 +123,7 @@ async def capture_full_page_cdp(browser) -> Optional[str]:
 	Returns:
 		Base64编码的截图数据，失败返回None
 	"""
+	raise RuntimeError("Screenshot capture has been removed; use extract_page_markdown() instead.")
 	try:
 		# 获取BrowserSession实例
 		browser_session = await get_browser_session(browser)
@@ -264,7 +260,8 @@ async def capture_full_page_cdp(browser) -> Optional[str]:
 		return None
 
 
-async def capture_full_page_stitch(browser) -> Optional[str]:
+async def capture_full_page_stitch(browser) -> str | None:
+	raise RuntimeError("Screenshot capture has been removed; use extract_page_markdown() instead.")
 	"""
 	使用滚动拼接方式截取完整页面（降级方案）
 
@@ -370,7 +367,7 @@ async def capture_full_page_stitch(browser) -> Optional[str]:
 		return None
 
 
-async def capture_full_page(browser, title: str) -> Optional[str]:
+async def capture_full_page(browser, title: str) -> str | None:
 	"""
 	完整页面截图（混合方案）
 	优先使用CDP原生，失败则降级到拼接方式
@@ -382,6 +379,7 @@ async def capture_full_page(browser, title: str) -> Optional[str]:
 	Returns:
 		Base64编码的截图数据
 	"""
+	raise RuntimeError("Screenshot capture has been removed; use extract_page_markdown() instead.")
 	# 方案1：尝试CDP原生
 	logger.info(f"[{title}] 使用CDP原生方式截取完整页面...")
 	screenshot = await capture_full_page_cdp(browser)
@@ -405,6 +403,7 @@ async def capture_full_page(browser, title: str) -> Optional[str]:
 
 
 def save_screenshot(screenshot_base64: str, filepath: Path) -> bool:
+	raise RuntimeError("Saving screenshots has been removed; save the JSON with announcementContentMd instead.")
 	"""
 	保存Base64截图到文件
 
@@ -428,6 +427,7 @@ def save_screenshot(screenshot_base64: str, filepath: Path) -> bool:
 
 # ============ Agent 自定义工具 ============
 
+import hashlib
 import json
 import yaml
 from datetime import datetime
@@ -443,7 +443,6 @@ from .field_schemas import (
 	normalize_date_ymd,
 	normalize_estimated_amount,
 )
-from .oss_client import OSSClient
 
 
 # 全局缓存字段配置和提示词（避免每次调用都读取文件）
@@ -456,6 +455,20 @@ TYPE_DEFAULTS = {
 	"boolean": False,
 	"array": [],
 }
+
+
+def compute_data_id(payload: dict) -> str:
+	"""
+	为单条返回数据生成稳定的唯一标识（用于同站点重复爬取去重）。
+
+	说明：
+	- 以 JSON 序列化后的内容为输入（sort_keys=True）计算 SHA256
+	- 会忽略自身字段 `dataId`，避免递归
+	"""
+	data = dict(payload or {})
+	data.pop("dataId", None)
+	raw = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+	return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _unescape_control_chars_outside_strings(text: str) -> str:
@@ -726,7 +739,7 @@ def normalize_field_value(key: str, value: Any, field_type: str):
 
 	# string
 	text = "" if value is None else str(value).strip()
-	if key in {"announcementDate", "updateDate", "bidOpenDate"}:
+	if key in {"announcementDate", "bidOpenDate"}:
 		return normalize_date_ymd(text)
 	if key == "estimatedAmount":
 		return normalize_estimated_amount(text)
@@ -791,6 +804,41 @@ async def click_show_full_info(browser_session) -> bool:
 		return False
 
 
+async def extract_page_markdown(browser_session: BrowserSession, site_name: str) -> str:
+	"""
+	提取当前详情页的 DOM，并转为 Markdown（尽量保留表格、结构、链接等）。
+
+	说明：这里只做“抓取原文 + HTML→Markdown”转换，不依赖截图。
+	"""
+	try:
+		cdp_session = await browser_session.get_or_create_cdp_session()
+		html_result = await cdp_session.cdp_client.send.Runtime.evaluate(
+			params={
+				"expression": """
+(() => {
+  const root = document.body ? document.body.cloneNode(true) : document.documentElement.cloneNode(true);
+  root.querySelectorAll('script,style,noscript').forEach(el => el.remove());
+  return root.outerHTML || '';
+})()
+""",
+				"returnByValue": True,
+			},
+			session_id=cdp_session.session_id,
+		)
+
+		html = html_result.get("result", {}).get("value") or ""
+		if not html:
+			return ""
+
+		from markdownify import markdownify as html_to_md
+
+		md = html_to_md(html, heading_style="ATX", bullets="-")
+		return re.sub(r"\\n{3,}", "\\n\\n", md).strip()
+	except Exception as e:
+		logger.warning(f"[{site_name}] 提取/转换公告原文(MD)失败: {e}")
+		return ""
+
+
 class SaveDetailParams(BaseModel):
 	"""保存详情页的参数"""
 	title: str = Field(description="招标标题")
@@ -813,19 +861,18 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 	tools = Tools()
 
 	@tools.action(
-		'保存当前详情页的截图和元数据到文件。在切换到详情页标签页后调用此工具。',
+		'保存当前详情页的公告原文(MD)和结构化字段到文件。在切换到详情页标签页后调用此工具。',
 		param_model=SaveDetailParams
 	)
 	async def save_detail(params: SaveDetailParams, browser_session: BrowserSession):
 		"""
-		保存详情页截图和JSON元数据
+		保存详情页公告原文(MD)和JSON结构化数据
 
 		会自动：
 		1. 获取当前页面URL
-		2. 截取完整页面截图
-		3. 使用Agent提取详情字段
-		4. 保存截图文件
-		5. 保存JSON元数据（包含提取的字段）
+		2. 抓取公告详情页DOM并转为Markdown
+		3. 使用Agent提取详情字段（flat + lots）
+		4. 保存JSON文件（包含原文+字段）
 		"""
 		title = params.title
 		date = params.date
@@ -851,35 +898,21 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 			# 3. 尝试点击"查看完整信息"按钮（展开脱敏内容）
 			await click_show_full_info(browser_session)
 
-			# 4. 截取完整页面截图
-			screenshot_base64 = await capture_full_page(browser_session, title)
-
-			if not screenshot_base64:
+			# 4. 提取公告原文（Markdown）
+			announcement_md = await extract_page_markdown(browser_session, site_name)
+			if not announcement_md:
 				return ActionResult(
-					extracted_content=f"截图失败: {title}",
-					error="截图失败"
+					extracted_content=f"提取公告原文失败: {title}",
+					error="提取公告原文失败"
 				)
 
-			# 5. 上传截图到 OSS（失败允许继续）
-			enable_oss_upload = os.getenv("ENABLE_OSS_UPLOAD", "").strip().lower() in {"1", "true", "yes", "on"}
-			if not enable_oss_upload:
-				# 本地测试模式：不上传 OSS，仍保存本地截图文件
-				image_url = "default"
-			else:
-				image_url = ""
-				try:
-					img_bytes = base64.b64decode(screenshot_base64)
-					image_url = OSSClient().upload(img_bytes, site_name)
-				except Exception as oss_err:
-					logger.warning(f"[{site_name}] OSS 上传失败: {oss_err}")
-					image_url = ""
-
-			# 6. 两次提取：flat + lots（如果提供了 llm）
+			# 5. 两次提取：flat + lots（如果提供了 llm）
 			flat_fields: dict = {}
 			lot_fields: dict = {"lotProducts": [], "lotCandidates": []}
 			if llm is not None:
 				flat_fields = await extract_fields_from_page(browser_session, llm, site_name, stage="flat")
 				lot_fields = await extract_fields_from_page(browser_session, llm, site_name, stage="lots")
+				flat_fields.pop("updateDate", None)
 
 			# 兜底：确保数组字段存在
 			lot_products = lot_fields.get("lotProducts") or []
@@ -893,22 +926,11 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 			file_date = normalize_date_ymd(date) or str(date).replace("/", "-").replace(".", "-")
 			filename = get_unique_filename(output_dir, title, file_date)
 
-			# 8. 保存本地截图（调试用）
-			png_path = output_dir / f"{filename}.png"
-			if not save_screenshot(screenshot_base64, png_path):
-				return ActionResult(
-					extracted_content=f"保存截图失败: {title}",
-					error="保存截图失败"
-				)
-
-			logger.info(f"[{site_name}] ✓ 截图已保存: {png_path.name}")
-
-			# 9. 组装最终返回结构（V2）
+			# 组装最终返回结构（V2）
 			result_data = {
-				# 代码字段（强制覆盖）
-				"imagePath": image_url,
 				"announcementUrl": detail_url,
 				"announcementName": title,
+				"announcementContentMd": announcement_md,
 
 				# LLM 字段
 				**flat_fields,
@@ -925,6 +947,9 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 			# 公告类别归一化（13 选 1）
 			result_data["announcementType"] = normalize_announcement_type(result_data.get("announcementType"))
 
+			# 为单条结果生成稳定唯一标识（用于去重）
+			result_data["dataId"] = compute_data_id(result_data)
+
 			json_path = output_dir / f"{filename}.json"
 			with open(json_path, 'w', encoding='utf-8') as f:
 				json.dump(result_data, f, ensure_ascii=False, indent=2)
@@ -939,8 +964,8 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 					logger.warning(f"[{site_name}] 回调执行失败: {cb_err}")
 
 			return ActionResult(
-				extracted_content=f"✓ 已保存: {filename}.png 和 {filename}.json",
-				long_term_memory=f"已保存详情页截图: {title[:30]}..."
+				extracted_content=f"✓ 已保存: {filename}.json",
+				long_term_memory=f"已保存详情页原文(MD): {title[:30]}..."
 			)
 
 		except Exception as e:

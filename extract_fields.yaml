@@ -30,12 +30,6 @@ fields:
     required: true
     hint: 项目本公告发布日期，格式 YYYY-MM-DD（优先详情页发布日期）
 
-  - key: updateDate
-    name: 更新日期
-    type: string
-    stage: flat
-    hint: 项目最新公告发布日期（如有），格式 YYYY-MM-DD
-
   - key: bidOpenDate
     name: 开标日期
     type: string
@@ -132,19 +126,20 @@ fields:
     type: array
     stage: lots
     hint: |
-      返回数组，每个元素是一个标段对象：
+      返回数组，每个元素是一条“标的物行”（同一标段多条标的物就返回多条记录）：
       {
         "lotNumber": "标段一/标段二/...",
         "lotName": "标段名称（如有）",
-        "subjects": ["标的物（一个或多个）"],
-        "productCategory": ["二级产品（如有，一个或多个）"],
-        "models": ["型号（一个或多个）"],
-        "unitPrices": ["单价（万元，两位小数，一个或多个）"],
-        "quantities": ["数量（正整数，一个或多个）"]
+        "subjects": "标的物（单条）",
+        "productCategory": "具体产品（如能匹配“具体产品表”则填标准名称；匹配不到填\"\"）",
+        "models": "型号（单条）",
+        "unitPrices": "单价（万元，两位小数，单条）",
+        "quantities": "数量（正整数，单条）"
       }
 
       重要规则：
       - 若页面未明确拆分多个标段，但能识别到采购标的/采购内容（哪怕只在标题或项目名称中出现），也请返回单标段对象：lotNumber="标段一"
+      - 若同一标段存在多个标的物，不要在字段里输出数组；请输出多条元素，每条一行
       - 若页面完全没有任何标的物/采购内容信息，则返回 []
 
   - key: lotCandidates
@@ -152,16 +147,17 @@ fields:
     type: array
     stage: lots
     hint: |
-      返回数组，每个元素是一个标段对象：
+      返回数组，每个元素是一条“候选单位行”（同一标段多家候选单位就返回多条记录）：
       {
         "lotNumber": "标段一/标段二/...",
         "lotName": "标段名称（如有）",
-        "candidates": ["候选单位（按名次从高到低，一个或多个）"],
-        "candidatePrices": ["候选单位报价（万元，两位小数，按名次排列，一个或多个）"],
+        "candidates": "候选单位（单条，按名次从高到低逐行输出）",
+        "candidatePrices": "候选单位报价（万元，两位小数，单条）",
         "winner": "中标单位（如有）",
         "winningAmount": 123.45
       }
 
       重要规则：
       - 若页面未明确拆分多个标段，但包含候选/中标/报价等信息，也请返回单标段对象：lotNumber="标段一"
+      - 若同一标段存在多家候选单位，不要在字段里输出数组；请输出多条元素，每条一行
       - 若页面完全没有候选/中标信息，则返回 []
