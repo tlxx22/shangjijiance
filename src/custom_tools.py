@@ -804,6 +804,118 @@ async def click_show_full_info(browser_session) -> bool:
 		return False
 
 
+def _html_to_clean_markdown(html: str, site_name: str) -> str:
+	"""
+	Convert raw HTML to a cleaner Markdown:
+	- Remove global chrome (header/nav/footer), hidden junk, and images
+	- Prefer main content containers when possible
+	- Keep tables/structure as much as markdownify allows
+	"""
+	if not html:
+		return ""
+
+	clean_html = html
+	try:
+		from bs4 import BeautifulSoup
+	except Exception as e:  # pragma: no cover
+		logger.warning(f"[{site_name}] bs4 不可用，跳过 HTML 清理: {e}")
+		BeautifulSoup = None  # type: ignore[assignment]
+
+	if BeautifulSoup is not None:
+		soup = BeautifulSoup(html, "html.parser")
+
+		# Drop non-content / noisy nodes.
+		for el in soup.select(
+			"script,style,noscript,svg,canvas,header,nav,footer,aside,"
+			"form,input,button,select,option,textarea"
+		):
+			el.decompose()
+
+		# Convert iframes to links (some sites embed the main content in an iframe).
+		for iframe in soup.find_all("iframe"):
+			src = (iframe.get("src") or "").strip()
+			if not src:
+				iframe.decompose()
+				continue
+			p = soup.new_tag("p")
+			a = soup.new_tag("a", href=src)
+			a.string = src
+			p.append(a)
+			iframe.replace_with(p)
+
+		# Drop hidden elements (common for popups/captcha modals living in DOM).
+		for el in soup.select('[hidden], [aria-hidden="true"], [role="dialog"], [aria-modal="true"]'):
+			el.decompose()
+		for el in soup.select("[style]"):
+			style = (el.get("style") or "").replace(" ", "").lower()
+			if "display:none" in style or "visibility:hidden" in style:
+				el.decompose()
+
+		# Remove images (especially base64/site icons) — keep alt text if present.
+		for img in soup.find_all("img"):
+			alt = (img.get("alt") or "").strip()
+			if alt:
+				img.replace_with(soup.new_string(alt))
+			else:
+				img.decompose()
+
+		# Prefer the main content container if we can find one.
+		body = soup.body or soup
+		candidate_nodes = []
+		for selector in (
+			"article",
+			"main",
+			"[role='main']",
+			"#content,.content",
+			"#main,.main",
+			"#detail,.detail",
+			"#article,.article",
+			"#post,.post",
+		):
+			candidate_nodes.extend(body.select(selector))
+
+		# Fallback: scan common containers and pick by text-density score.
+		if not candidate_nodes:
+			candidate_nodes = list(body.find_all(["article", "main", "section", "div"]))
+
+		# Large pages can contain tons of <div>; pre-filter to keep it fast enough.
+		if len(candidate_nodes) > 800:
+			ranked = []
+			for node in candidate_nodes:
+				tlen = len(node.get_text(" ", strip=True))
+				if tlen >= 200:
+					ranked.append((tlen, node))
+			ranked.sort(key=lambda x: x[0], reverse=True)
+			candidate_nodes = [n for _, n in ranked[:300]]
+
+		def _score(node) -> int:
+			text_len = len(node.get_text(" ", strip=True))
+			if text_len < 200:
+				return -10**9
+			links = node.find_all("a")
+			link_text_len = sum(len(a.get_text(" ", strip=True)) for a in links)
+			num_links = len(links)
+			num_li = len(node.find_all("li"))
+			num_tables = len(node.find_all("table"))
+			# Prefer rich text/tables; penalize navigation-y blocks dominated by links/lists.
+			return text_len - link_text_len * 2 - num_links * 20 - num_li * 5 + num_tables * 80
+
+		best = max(candidate_nodes, key=_score, default=None)
+		clean_html = str(best) if best is not None else str(body)
+
+	from markdownify import markdownify as html_to_md
+
+	md = html_to_md(clean_html, heading_style="ATX", bullets="-")
+	md = md.replace("\r\n", "\n")
+	md = re.sub(r"\n{3,}", "\n\n", md).strip()
+	if len(md) < 50 and clean_html != html:
+		# Fallback: return the full-page conversion rather than an empty/near-empty result.
+		md = html_to_md(html, heading_style="ATX", bullets="-")
+		md = md.replace("\r\n", "\n")
+		md = re.sub(r"\n{3,}", "\n\n", md).strip()
+	return md
+
+
 async def extract_page_markdown(browser_session: BrowserSession, site_name: str) -> str:
 	"""
 	提取当前详情页的 DOM，并转为 Markdown（尽量保留表格、结构、链接等）。
@@ -816,7 +928,9 @@ async def extract_page_markdown(browser_session: BrowserSession, site_name: str)
 			params={
 				"expression": """
 (() => {
-  const root = document.body ? document.body.cloneNode(true) : document.documentElement.cloneNode(true);
+  // Keep a full DOM snapshot (some sites render key content outside <main>/<article>),
+  // then do aggressive cleanup on the Python side.
+  const root = document.documentElement ? document.documentElement.cloneNode(true) : document.body.cloneNode(true);
   root.querySelectorAll('script,style,noscript').forEach(el => el.remove());
   return root.outerHTML || '';
 })()
@@ -830,10 +944,7 @@ async def extract_page_markdown(browser_session: BrowserSession, site_name: str)
 		if not html:
 			return ""
 
-		from markdownify import markdownify as html_to_md
-
-		md = html_to_md(html, heading_style="ATX", bullets="-")
-		return re.sub(r"\\n{3,}", "\\n\\n", md).strip()
+		return _html_to_clean_markdown(html, site_name=site_name)
 	except Exception as e:
 		logger.warning(f"[{site_name}] 提取/转换公告原文(MD)失败: {e}")
 		return ""
@@ -858,7 +969,9 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 	Returns:
 		配置好的 Tools 实例
 	"""
-	tools = Tools()
+	# 禁用 browser-use 自带的文件读写类工具，避免 Agent 用 write_file 之类“假保存”，
+	# 导致不调用 save_detail、SSE 无 item 输出。
+	tools = Tools(exclude_actions=["write_file", "replace_file", "read_file"])
 
 	@tools.action(
 		'保存当前详情页的公告原文(MD)和结构化字段到文件。在切换到详情页标签页后调用此工具。',

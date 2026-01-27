@@ -31,11 +31,11 @@ GLOBAL_RULES = """
   - 如果 M = N → 说明在**当前标签**打开 → 执行【流程B】
 
 **【流程A：新标签打开】**
-1. switch_tab → 切换到新标签（tabs 列表中最新的那个）
+1. switch → 切换到新标签（tabs 列表中最新的那个）
 2. wait → 等待 2 秒
 3. save_detail → 保存详情
-4. close_tab → 关闭当前详情页标签
-5. wait → 等待 2 秒，确保回到列表页
+4. close → 关闭当前详情页标签
+5. wait → 等待 2 秒，确保回到列表页（close 后通常会自动回到列表页，**不要再额外 switch**）
 
 **【流程B：当前标签打开】**
 1. wait → 等待 2 秒
@@ -52,9 +52,10 @@ GLOBAL_RULES = """
   - 执行任何其他操作
 
 **关于工具使用：**
-- `switch_tab`：切换到指定标签（仅流程A使用）
-- `close_tab`：关闭当前标签（仅流程A使用）
+- `switch`：切换到指定标签（仅流程A使用）
+- `close`：关闭当前标签（仅流程A使用）
 - `go_back`：浏览器返回按钮（仅流程B使用）
+- `write_file` / `replace_file` / `read_file`：已禁用（避免“假保存”导致不触发 save_detail/SSE item），禁止使用
 
 ---
 

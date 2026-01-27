@@ -22,11 +22,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from src.api.models import CrawlRequest
+from src.api.models import CrawlRequest, EmbeddingRequest, EmbeddingResponse
 from src.api.prompt_manager import load_prompt_template, render_prompt
 from src.api.crawl_session import CrawlSession, event_generator
 from src.config_manager import SiteConfig
 from src.logger_config import get_logger, init_logger, set_request_id, reset_request_id
+from src.embedding_client import get_text_embedding
 
 logger = get_logger()
 
@@ -181,6 +182,24 @@ async def crawl(request: CrawlRequest, http_request: Request):
     except Exception:
         crawl_lock.release()  # 初始化失败，释放锁
         raise
+
+
+@app.post("/embedding", response_model=EmbeddingResponse)
+async def embedding(request: EmbeddingRequest):
+    """
+    将输入文本（通常为公告名称）向量化并返回 embedding。
+    """
+    try:
+        model_name, vector = await asyncio.to_thread(get_text_embedding, request.text, model=request.model)
+        return {"model": model_name, "embedding": vector}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        # Server misconfiguration (missing key/base_url, etc.)
+        raise HTTPException(500, str(e))
+    except Exception as e:
+        logger.error(f"/embedding failed: {e}")
+        raise HTTPException(502, f"Upstream embedding error: {e}")
 
 
 if __name__ == "__main__":

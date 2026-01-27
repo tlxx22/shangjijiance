@@ -6,6 +6,7 @@
 |------|------|------|
 | GET | `/health` | 健康检查 |
 | POST | `/crawl` | 发起爬取任务（SSE 流式响应） |
+| POST | `/embedding` | 文本向量化（返回 embedding 向量） |
 
 ---
 
@@ -207,3 +208,33 @@ with requests.post(url, json=payload, stream=True) as r:
 - **结束判断**：收到 `type=done` 或 `type=error` 即结束；若未收到就断开则视为失败/取消
 - **超时**：默认 1200s，超时后发送 `type=error` 并断开
 - **心跳**：30s 无任何输出才发送，用于保持连接
+
+---
+
+## POST /embedding
+
+将输入文本向量化并返回 embedding 向量。
+
+### 请求
+
+**Content-Type**: `application/json`
+
+```json
+{
+  "text": "公告名称",
+  "model": "Qwen/Qwen3-Embedding-8B"
+}
+```
+
+说明：
+- `model` 可选；不传则使用环境变量 `SILICONFLOW_EMBEDDING_MODEL` 或默认 `Qwen/Qwen3-Embedding-8B`
+- 需在服务端配置环境变量：`SILICONFLOW_API_KEY`（硅基流动 Key）与可选 `SILICONFLOW_BASE_URL`
+
+### 响应（200）
+
+```json
+{
+  "model": "Qwen/Qwen3-Embedding-8B",
+  "embedding": [0.123, -0.456, 0.789]
+}
+```

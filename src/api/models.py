@@ -2,7 +2,7 @@
 Pydantic 请求/响应模型
 """
 from datetime import date
-from pydantic import BaseModel, HttpUrl, constr, model_validator
+from pydantic import BaseModel, HttpUrl, Field, constr, model_validator
 
 
 class SiteInfo(BaseModel):
@@ -36,3 +36,15 @@ class CrawlRequest(BaseModel):
         if self.date_start > self.date_end:
             raise ValueError("date_start > date_end")
         return self
+
+
+class EmbeddingRequest(BaseModel):
+    """向量化请求"""
+    text: constr(min_length=1) = Field(description="待向量化的文本（通常为公告名称）")
+    model: str | None = Field(default=None, description="可选：覆盖默认 embedding 模型名")
+
+
+class EmbeddingResponse(BaseModel):
+    """向量化响应"""
+    model: str = Field(description="实际使用的模型名")
+    embedding: list[float] = Field(description="向量值")
