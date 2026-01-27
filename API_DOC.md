@@ -227,8 +227,15 @@ with requests.post(url, json=payload, stream=True) as r:
 ```
 
 说明：
-- `model` 可选；不传则使用环境变量 `SILICONFLOW_EMBEDDING_MODEL` 或默认 `Qwen/Qwen3-Embedding-8B`
-- 需在服务端配置环境变量：`SILICONFLOW_API_KEY`（硅基流动 Key）与可选 `SILICONFLOW_BASE_URL`
+- `model` 可选；不传会根据 `trans.py` 的 `ROUTE` 选择默认模型：
+  - `ROUTE="official"`：默认 `Qwen/Qwen3-Embedding-8B`（硅基流动）
+  - `ROUTE="sany"`：默认 `text-embedding-v4`（三一网关 Ali embeddings）
+- 需在服务端配置环境变量（按路由选择其一）：
+  - `ROUTE="official"`：`SILICONFLOW_API_KEY`，可选 `SILICONFLOW_BASE_URL`、`SILICONFLOW_EMBEDDING_MODEL`
+  - `ROUTE="sany"`：`SANY_AI_GATEWAY_KEY`、`SANY_AI_GATEWAY_BASE_URL`，可选 `SANY_EMBEDDING_MODEL`/`SANY_EMBEDDING_DIMENSIONS`/`SANY_EMBEDDING_ENCODING_FORMAT`
+- 路由行为：
+  - `ROUTE="official"`：服务端调用 `SiliconFlow` 的 OpenAI 协议 embeddings（`{SILICONFLOW_BASE_URL}/embeddings`）
+  - `ROUTE="sany"`：服务端调用三一网关 embeddings（`{SANY_AI_GATEWAY_BASE_URL}/ai-api/ali/embeddings`，OpenAI 协议：`base_url` 设为 `{SANY_AI_GATEWAY_BASE_URL}/ai-api/ali`）
 
 ### 响应（200）
 
@@ -237,4 +244,13 @@ with requests.post(url, json=payload, stream=True) as r:
   "model": "Qwen/Qwen3-Embedding-8B",
   "embedding": [0.123, -0.456, 0.789]
 }
+```
+
+### 调用示例
+
+```bash
+# 调用本服务（不关心后端走 official 还是 sany）
+curl -X POST http://localhost:8000/embedding \
+  -H "Content-Type: application/json" \
+  -d '{"text":"中交三航三公司集采中心采购（安全带）","model":null}'
 ```
