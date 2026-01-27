@@ -174,7 +174,7 @@ async def process_entire_site(
 1. **滚动查看**当前页面，找到符合条件的招标条目
 2. **提取信息**：记录标题和发布日期
 3. **点击标题**打开详情页（会在新标签页打开）
-4. **按全局规则执行标签页操作**：switch → wait → save_detail → close（close 后不要再 switch，等待自动回到列表页）
+4. **按全局规则执行标签页操作**：switch → wait → save_detail → close → switch → wait
 5. **继续处理**当前页面的下一个条目
 6. **当前页处理完后**，点击"下一页"翻到下一页
 7. **重复**直到处理完 {max_pages} 页或没有更多页面

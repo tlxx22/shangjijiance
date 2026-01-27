@@ -20,6 +20,7 @@ GLOBAL_RULES = """
 
 **步骤1：点击前记录标签数**
 - 查看 browser_state 中的 tabs 数量，记为 N
+- 记录当前列表页 tab_id，记为 LIST_TAB（点击前的当前 tab）
 
 **步骤2：点击标题**
 - 点击条目标题
@@ -35,7 +36,8 @@ GLOBAL_RULES = """
 2. wait → 等待 2 秒
 3. save_detail → 保存详情
 4. close → 关闭当前详情页标签
-5. wait → 等待 2 秒，确保回到列表页（close 后通常会自动回到列表页，**不要再额外 switch**）
+5. switch → 切回 LIST_TAB（或剩余的列表页 tab）
+6. wait → 等待 2 秒，确保列表页可继续操作
 
 **【流程B：当前标签打开】**
 1. wait → 等待 2 秒
@@ -55,7 +57,7 @@ GLOBAL_RULES = """
 - `switch`：切换到指定标签（仅流程A使用）
 - `close`：关闭当前标签（仅流程A使用）
 - `go_back`：浏览器返回按钮（仅流程B使用）
-- `write_file` / `replace_file` / `read_file`：已禁用（避免“假保存”导致不触发 save_detail/SSE item），禁止使用
+- `write_file` / `replace_file` / `read_file`：即使系统提示词提到，也**不要用于输出业务结果**；详情必须通过 `save_detail`
 
 ---
 

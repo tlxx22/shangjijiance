@@ -928,10 +928,68 @@ async def extract_page_markdown(browser_session: BrowserSession, site_name: str)
 			params={
 				"expression": """
 (() => {
-  // Keep a full DOM snapshot (some sites render key content outside <main>/<article>),
-  // then do aggressive cleanup on the Python side.
-  const root = document.documentElement ? document.documentElement.cloneNode(true) : document.body.cloneNode(true);
-  root.querySelectorAll('script,style,noscript').forEach(el => el.remove());
+  // Try to extract the *detail content container* first.
+  // Some sites (e.g. sp.iccec.cn) have a huge navigation shell; returning full DOM makes Markdown very noisy.
+  const keywords = ['公告内容', '公告标题', '项目编号', '发布时间', '附件列表', '物资信息', '相关公告列表'];
+  const body = document.body || document.documentElement;
+  if (!body) return '';
+
+  function textOf(el) {
+    try { return (el.innerText || '').trim(); } catch (e) { return ''; }
+  }
+  function count(el, selector) {
+    try { return el.querySelectorAll(selector).length; } catch (e) { return 0; }
+  }
+  function score(el) {
+    const t = textOf(el);
+    const len = t.length;
+    if (len < 300) return -1e18;
+    let hits = 0;
+    for (const k of keywords) if (t.includes(k)) hits++;
+    // Prefer containers that look like "detail" rather than nav menus.
+    const links = count(el, 'a');
+    const lis = count(el, 'li');
+    const tables = count(el, 'table');
+    return hits * 20000 + len + tables * 500 - links * 200 - lis * 50;
+  }
+
+  // 1) Fast path: common detail containers
+  const selectorCandidates = [
+    'article', 'main', "[role='main']",
+    '#detail', '.detail', '.detail-content', '.detailCon', '.detail-con',
+    '.notice-detail', '.noticeDetail', '.notice-detail-content',
+    '#content', '.content', '#main', '.main'
+  ];
+  let best = null;
+  let bestScore = -1e18;
+  for (const sel of selectorCandidates) {
+    const nodes = body.querySelectorAll(sel);
+    for (const n of nodes) {
+      const s = score(n);
+      if (s > bestScore) { best = n; bestScore = s; }
+    }
+  }
+
+  // 2) Keyword-driven: find nodes containing key labels and choose the best parent-like block
+  if (!best) {
+    const all = body.querySelectorAll('div,section,main,article');
+    // pre-filter by text length to keep it fast
+    const ranked = [];
+    for (const n of all) {
+      const t = textOf(n);
+      if (t.length >= 300) ranked.push([t.length, n]);
+    }
+    ranked.sort((a,b) => b[0]-a[0]);
+    const top = ranked.slice(0, 300).map(x => x[1]);
+    for (const n of top) {
+      const s = score(n);
+      if (s > bestScore) { best = n; bestScore = s; }
+    }
+  }
+
+  // 3) Fallback: full DOM snapshot then let Python-side cleanup handle it.
+  const root = (best || document.documentElement || body).cloneNode(true);
+  try { root.querySelectorAll('script,style,noscript').forEach(el => el.remove()); } catch (e) {}
   return root.outerHTML || '';
 })()
 """,
@@ -969,9 +1027,11 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 	Returns:
 		配置好的 Tools 实例
 	"""
-	# 禁用 browser-use 自带的文件读写类工具，避免 Agent 用 write_file 之类“假保存”，
-	# 导致不调用 save_detail、SSE 无 item 输出。
-	tools = Tools(exclude_actions=["write_file", "replace_file", "read_file"])
+	# 注意：browser-use 的系统提示词会鼓励模型写 todo.md/results.md。
+	# 我们不依赖这些文件产出，真正的“保存”必须通过 save_detail 完成并触发 SSE item。
+	# 因此这里不禁用 file tools（禁用会导致模型在早期规划阶段产生大量无效 action schema），
+	# 而是在提示词里明确禁止使用 file tools 作为业务输出。
+	tools = Tools()
 
 	@tools.action(
 		'保存当前详情页的公告原文(MD)和结构化字段到文件。在切换到详情页标签页后调用此工具。',
@@ -1010,6 +1070,8 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 
 			# 3. 尝试点击"查看完整信息"按钮（展开脱敏内容）
 			await click_show_full_info(browser_session)
+			# 一些站点详情内容是异步渲染的，点击后需要额外等待
+			await asyncio.sleep(2)
 
 			# 4. 提取公告原文（Markdown）
 			announcement_md = await extract_page_markdown(browser_session, site_name)
