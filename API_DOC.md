@@ -108,7 +108,7 @@ data: {"type":"start","request_id":"a1b2c3d4","site_name":"安能招投标平台
 每抓取到一条详情页数据立即发送。
 
 ```json
-data: {"type":"item","request_id":"a1b2c3d4","data":{"dataId":"<sha256>","announcementUrl":"https://example.com/detail/123","announcementName":"某某项目招标公告","announcementContentMd":"# 某某项目招标公告\\n\\n（此处为详情页原文，已转为 Markdown，包含表格/结构等）","projectName":"某某项目","projectId":"CEZB250209959","announcementDate":"2026-01-19","bidOpenDate":"2026-01-26","budgetAmount":500.0,"estimatedAmount":"400.00~600.00","buyerAddress":"北京市朝阳区","buyerRegion":"北京市","projectAddress":"内蒙古鄂尔多斯市","projectRegion":"内蒙古","deliveryAddress":"内蒙古鄂尔多斯市XX煤矿","deliveryRegion":"内蒙古","buyerName":"国能（北京）跨境电商有限公司","buyerContact":"张三","buyerPhone":"010-12345678","agency":"国家能源集团国际工程咨询有限公司","announcementType":"招标","lotProducts":[{"lotNumber":"标段一","lotName":"三山岛金矿","subjects":"液压挖掘机","productCategory":"挖机","models":"XE490DK","unitPrices":"280.00","quantities":"2"}],"lotCandidates":[{"lotNumber":"标段一","lotName":"三山岛金矿","candidates":"A公司","candidatePrices":"97.00","winner":"A公司","winningAmount":97.0}]}}
+data: {"type":"item","request_id":"a1b2c3d4","data":{"dataId":"<sha256>","announcementUrl":"https://example.com/detail/123","announcementName":"某某项目招标公告","announcementContentMd":"# 某某项目招标公告\\n\\n（此处为详情页原文，已转为 Markdown，包含表格/结构等）","projectName":"某某项目","projectId":"CEZB250209959","announcementDate":"2026-01-19","bidOpenDate":"2026-01-26","budgetAmount":500.0,"estimatedAmount":"400.00~600.00","buyerCountry":"中国","buyerProvince":"北京市","buyerCity":"北京市","buyerDistrict":"朝阳区","buyerAddressDetail":"","projectCountry":"中国","projectProvince":"内蒙古","projectCity":"鄂尔多斯市","projectDistrict":"","projectAddressDetail":"","deliveryCountry":"中国","deliveryProvince":"内蒙古","deliveryCity":"鄂尔多斯市","deliveryDistrict":"","deliveryAddressDetail":"XX煤矿","buyerName":"国能（北京）跨境电商有限公司","buyerContact":"张三","buyerPhone":"010-12345678","agency":"国家能源集团国际工程咨询有限公司","announcementType":"招标","lotProducts":[{"lotNumber":"标段一","lotName":"三山岛金矿","subjects":"液压挖掘机","productCategory":"挖机","models":"XE490DK","unitPrices":"280.00","quantities":"2"}],"lotCandidates":[{"lotNumber":"标段一","lotName":"三山岛金矿","candidates":"A公司","candidatePrices":"97.00","winner":"A公司","winningAmount":97.0}]}}
 ```
 
 说明：
@@ -116,6 +116,10 @@ data: {"type":"item","request_id":"a1b2c3d4","data":{"dataId":"<sha256>","announ
 - `announcementContentMd` 为详情页原文（Markdown），尽量保留表格/结构等
 - `budgetAmount` / `lotCandidates[].winningAmount` 单位为“万元”，保留两位小数；取不到填 `null`
 - `estimatedAmount` 格式为 `"下限~上限"`（万元，两位小数）；取不到填 `""`
+- 地址字段已拆分为 3 组 * 5 个扁平字段（取不到填 `""`；`*Country` 默认为 `"中国"`）：
+  - `buyerCountry/buyerProvince/buyerCity/buyerDistrict/buyerAddressDetail`
+  - `projectCountry/projectProvince/projectCity/projectDistrict/projectAddressDetail`
+  - `deliveryCountry/deliveryProvince/deliveryCity/deliveryDistrict/deliveryAddressDetail`
 - `lotProducts` / `lotCandidates` 无内容时返回 `[]`
 - `lotProducts`/`lotCandidates` 中单条元素为“一行”；如有多个值请输出多条元素，不要在字段里输出数组
 
@@ -253,4 +257,18 @@ with requests.post(url, json=payload, stream=True) as r:
 curl -X POST http://localhost:8000/embedding \
   -H "Content-Type: application/json" \
   -d '{"text":"中交三航三公司集采中心采购（安全带）","model":null}'
+```
+
+在某些终端/控制台不支持多行粘贴时，推荐使用“一行 JSON”的写法（最稳定）：
+
+```bash
+curl -v --max-time 15 -X POST 'http://localhost:80/embedding' -H 'Content-Type: application/json' --data-binary '{"text":"液压挖掘机采购招标公告"}'
+```
+
+如果遇到返回 `{"detail":"There was an error parsing the body"}`，可改用纯文本 body（本服务支持 `text/plain` 兜底）：
+
+```bash
+curl -X POST http://localhost:8000/embedding \
+  -H "Content-Type: text/plain; charset=utf-8" \
+  --data-binary "液压挖掘机采购招标公告"
 ```

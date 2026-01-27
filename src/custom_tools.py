@@ -739,6 +739,9 @@ def normalize_field_value(key: str, value: Any, field_type: str):
 
 	# string
 	text = "" if value is None else str(value).strip()
+	# 地址国家字段：默认中国（仅当提取为空时）
+	if key.endswith("Country") and not text:
+		return "中国"
 	if key in {"announcementDate", "bidOpenDate"}:
 		return normalize_date_ymd(text)
 	if key == "estimatedAmount":

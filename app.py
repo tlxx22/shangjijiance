@@ -6,6 +6,7 @@ SSE HTTP API 服务主入口
 - 生产模式：gunicorn -c gunicorn.conf.py app:app
 """
 import asyncio
+import json
 import sys
 import uuid
 from pathlib import Path
@@ -185,12 +186,29 @@ async def crawl(request: CrawlRequest, http_request: Request):
 
 
 @app.post("/embedding", response_model=EmbeddingResponse)
-async def embedding(request: EmbeddingRequest):
+async def embedding(http_request: Request):
     """
     将输入文本（通常为公告名称）向量化并返回 embedding。
     """
     try:
-        model_name, vector = await asyncio.to_thread(get_text_embedding, request.text, model=request.model)
+        # FastAPI/Starlette 在遇到某些 curl/代理组合时，可能在参数绑定阶段就报
+        # "There was an error parsing the body"（用户看不到具体原因）。
+        # 这里改为手动解析，支持：
+        # - application/json: {"text": "...", "model": "..."}
+        # - text/plain: 直接把 body 当 text
+        raw = await http_request.body()
+        text_fallback = raw.decode("utf-8", errors="ignore").strip()
+
+        payload: dict
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                payload = {"text": text_fallback}
+        except Exception:
+            payload = {"text": text_fallback}
+
+        req = EmbeddingRequest.model_validate(payload)
+        model_name, vector = await asyncio.to_thread(get_text_embedding, req.text, model=req.model)
         return {"model": model_name, "embedding": vector}
     except ValueError as e:
         raise HTTPException(400, str(e))

@@ -48,41 +48,100 @@ fields:
     stage: flat
     hint: 若无预算/中标金额，估算范围，格式 "下限~上限"，单位：万元，两位小数
 
-  - key: buyerAddress
-    name: 采购单位地址
-    type: string
-    stage: flat
-    hint: 采购单位/招标单位地址全称（如有）
+  # ===== 地址字段（3 组 * 5，均为 string）=====
+  # 规则：
+  # - 详情页提取不到则填 ""（空字符串）
+  # - Country 默认填 "中国"（除非详情明确为其他国家）
 
-  - key: buyerRegion
-    name: 采购单位地区
+  - key: buyerCountry
+    name: 采购单位国家
     type: string
     stage: flat
-    hint: 识别采购单位地址所属省/国家（直接输出全称，如“湖南省”“坦桑尼亚”）
+    hint: 采购单位/招标单位地址所属国家；一般填“中国”，除非页面明确为其他国家
 
-  - key: projectAddress
-    name: 项目所在地址
+  - key: buyerProvince
+    name: 采购单位省
     type: string
     stage: flat
-    hint: 项目所在地址全称（如有）
+    hint: 采购单位地址所属省/自治区/直辖市（如有）
 
-  - key: projectRegion
-    name: 项目所在地区
+  - key: buyerCity
+    name: 采购单位市
     type: string
     stage: flat
-    hint: 识别项目所在地址所属省/国家（直接输出全称）
+    hint: 采购单位地址所属市/州（如有）
 
-  - key: deliveryAddress
-    name: 交货地址
+  - key: buyerDistrict
+    name: 采购单位区县
     type: string
     stage: flat
-    hint: 交货地址全称（如有）
+    hint: 采购单位地址所属区/县/旗（如有）
 
-  - key: deliveryRegion
-    name: 交货地区
+  - key: buyerAddressDetail
+    name: 采购单位详细地址
     type: string
     stage: flat
-    hint: 识别交货地址所属省/国家（直接输出全称）
+    hint: 采购单位/招标单位详细地址（街道门牌等），不要包含国家/省/市/区等上层字段
+
+  - key: projectCountry
+    name: 项目所在国家
+    type: string
+    stage: flat
+    hint: 项目所在国家；一般填“中国”，除非页面明确为其他国家
+
+  - key: projectProvince
+    name: 项目所在省
+    type: string
+    stage: flat
+    hint: 项目所在地所属省/自治区/直辖市（如有）
+
+  - key: projectCity
+    name: 项目所在市
+    type: string
+    stage: flat
+    hint: 项目所在地所属市/州（如有）
+
+  - key: projectDistrict
+    name: 项目所在区县
+    type: string
+    stage: flat
+    hint: 项目所在地所属区/县/旗（如有）
+
+  - key: projectAddressDetail
+    name: 项目所在详细地址
+    type: string
+    stage: flat
+    hint: 项目详细地址（街道/园区/矿区等），不要包含国家/省/市/区等上层字段
+
+  - key: deliveryCountry
+    name: 交货国家
+    type: string
+    stage: flat
+    hint: 交货地址所属国家；一般填“中国”，除非页面明确为其他国家
+
+  - key: deliveryProvince
+    name: 交货省
+    type: string
+    stage: flat
+    hint: 交货地址所属省/自治区/直辖市（如有）
+
+  - key: deliveryCity
+    name: 交货市
+    type: string
+    stage: flat
+    hint: 交货地址所属市/州（如有）
+
+  - key: deliveryDistrict
+    name: 交货区县
+    type: string
+    stage: flat
+    hint: 交货地址所属区/县/旗（如有）
+
+  - key: deliveryAddressDetail
+    name: 交货详细地址
+    type: string
+    stage: flat
+    hint: 交货详细地址（街道门牌/工地/矿区等），不要包含国家/省/市/区等上层字段
 
   - key: buyerName
     name: 采购单位
