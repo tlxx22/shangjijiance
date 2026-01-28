@@ -113,7 +113,7 @@ Gunicorn 配置文件，关键参数：
 output/
 └── 2026-01-09/
     └── 网站名称/
-        └── 项目A_2026-01-09.json  # 结构化数据（含公告原文 Markdown：announcementContentMd）
+        └── 项目A_2026-01-09.json  # 结构化数据（含公告正文原始 HTML：announcementContent）
 ```
 
 ## 日志

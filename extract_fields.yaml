@@ -57,91 +57,91 @@ fields:
     name: 采购单位国家
     type: string
     stage: flat
-    hint: 采购单位/招标单位地址所属国家；一般填“中国”，除非页面明确为其他国家
+    hint: 从“buyerAddressDetail(详细地址/全地址)”中解析得到的国家；若详细地址为空则填“中国”
 
   - key: buyerProvince
     name: 采购单位省
     type: string
     stage: flat
-    hint: 采购单位地址所属省/自治区/直辖市（如有）
+    hint: 从“buyerAddressDetail(详细地址/全地址)”中解析得到的省/自治区/直辖市；解析不到填 ""
 
   - key: buyerCity
     name: 采购单位市
     type: string
     stage: flat
-    hint: 采购单位地址所属市/州（如有）
+    hint: 从“buyerAddressDetail(详细地址/全地址)”中解析得到的市/州；解析不到填 ""
 
   - key: buyerDistrict
     name: 采购单位区县
     type: string
     stage: flat
-    hint: 采购单位地址所属区/县/旗（如有）
+    hint: 从“buyerAddressDetail(详细地址/全地址)”中解析得到的区/县/旗；解析不到填 ""
 
   - key: buyerAddressDetail
     name: 采购单位详细地址
     type: string
     stage: flat
-    hint: 采购单位/招标单位详细地址（街道门牌等），不要包含国家/省/市/区等上层字段
+    hint: 从详情页提取到的采购单位/招标单位完整地址（全地址文本），用于后续解析国家/省/市/区；找不到填 ""
 
   - key: projectCountry
     name: 项目所在国家
     type: string
     stage: flat
-    hint: 项目所在国家；一般填“中国”，除非页面明确为其他国家
+    hint: 从“projectAddressDetail(详细地址/全地址)”中解析得到的国家；若详细地址为空则填“中国”
 
   - key: projectProvince
     name: 项目所在省
     type: string
     stage: flat
-    hint: 项目所在地所属省/自治区/直辖市（如有）
+    hint: 从“projectAddressDetail(详细地址/全地址)”中解析得到的省/自治区/直辖市；解析不到填 ""
 
   - key: projectCity
     name: 项目所在市
     type: string
     stage: flat
-    hint: 项目所在地所属市/州（如有）
+    hint: 从“projectAddressDetail(详细地址/全地址)”中解析得到的市/州；解析不到填 ""
 
   - key: projectDistrict
     name: 项目所在区县
     type: string
     stage: flat
-    hint: 项目所在地所属区/县/旗（如有）
+    hint: 从“projectAddressDetail(详细地址/全地址)”中解析得到的区/县/旗；解析不到填 ""
 
   - key: projectAddressDetail
     name: 项目所在详细地址
     type: string
     stage: flat
-    hint: 项目详细地址（街道/园区/矿区等），不要包含国家/省/市/区等上层字段
+    hint: 从详情页提取到的项目所在地完整地址（全地址文本），用于后续解析国家/省/市/区；找不到填 ""
 
   - key: deliveryCountry
     name: 交货国家
     type: string
     stage: flat
-    hint: 交货地址所属国家；一般填“中国”，除非页面明确为其他国家
+    hint: 从“deliveryAddressDetail(详细地址/全地址)”中解析得到的国家；若详细地址为空则填“中国”
 
   - key: deliveryProvince
     name: 交货省
     type: string
     stage: flat
-    hint: 交货地址所属省/自治区/直辖市（如有）
+    hint: 从“deliveryAddressDetail(详细地址/全地址)”中解析得到的省/自治区/直辖市；解析不到填 ""
 
   - key: deliveryCity
     name: 交货市
     type: string
     stage: flat
-    hint: 交货地址所属市/州（如有）
+    hint: 从“deliveryAddressDetail(详细地址/全地址)”中解析得到的市/州；解析不到填 ""
 
   - key: deliveryDistrict
     name: 交货区县
     type: string
     stage: flat
-    hint: 交货地址所属区/县/旗（如有）
+    hint: 从“deliveryAddressDetail(详细地址/全地址)”中解析得到的区/县/旗；解析不到填 ""
 
   - key: deliveryAddressDetail
     name: 交货详细地址
     type: string
     stage: flat
-    hint: 交货详细地址（街道门牌/工地/矿区等），不要包含国家/省/市/区等上层字段
+    hint: 从详情页提取到的交货完整地址（全地址文本），用于后续解析国家/省/市/区；找不到填 ""
 
   - key: buyerName
     name: 采购单位

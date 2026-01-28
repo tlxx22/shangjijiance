@@ -1,6 +1,6 @@
 """
 自定义工具模块
-提供公告原文(MD)提取、文件名处理等工具函数
+提供公告正文原始内容提取、文件名处理等工具函数
 """
 
 import asyncio
@@ -123,7 +123,7 @@ async def capture_full_page_cdp(browser) -> str | None:
 	Returns:
 		Base64编码的截图数据，失败返回None
 	"""
-	raise RuntimeError("Screenshot capture has been removed; use extract_page_markdown() instead.")
+	raise RuntimeError("Screenshot capture has been removed; use extract_page_content() instead.")
 	try:
 		# 获取BrowserSession实例
 		browser_session = await get_browser_session(browser)
@@ -261,7 +261,7 @@ async def capture_full_page_cdp(browser) -> str | None:
 
 
 async def capture_full_page_stitch(browser) -> str | None:
-	raise RuntimeError("Screenshot capture has been removed; use extract_page_markdown() instead.")
+	raise RuntimeError("Screenshot capture has been removed; use extract_page_content() instead.")
 	"""
 	使用滚动拼接方式截取完整页面（降级方案）
 
@@ -379,7 +379,7 @@ async def capture_full_page(browser, title: str) -> str | None:
 	Returns:
 		Base64编码的截图数据
 	"""
-	raise RuntimeError("Screenshot capture has been removed; use extract_page_markdown() instead.")
+	raise RuntimeError("Screenshot capture has been removed; use extract_page_content() instead.")
 	# 方案1：尝试CDP原生
 	logger.info(f"[{title}] 使用CDP原生方式截取完整页面...")
 	screenshot = await capture_full_page_cdp(browser)
@@ -403,7 +403,7 @@ async def capture_full_page(browser, title: str) -> str | None:
 
 
 def save_screenshot(screenshot_base64: str, filepath: Path) -> bool:
-	raise RuntimeError("Saving screenshots has been removed; save the JSON with announcementContentMd instead.")
+	raise RuntimeError("Saving screenshots has been removed; save the JSON with announcementContent instead.")
 	"""
 	保存Base64截图到文件
 
@@ -430,6 +430,7 @@ def save_screenshot(screenshot_base64: str, filepath: Path) -> bool:
 import hashlib
 import json
 import yaml
+from dataclasses import dataclass
 from datetime import datetime
 from pydantic import BaseModel, Field
 from browser_use import Agent
@@ -448,6 +449,157 @@ from .field_schemas import (
 # 全局缓存字段配置和提示词（避免每次调用都读取文件）
 _extract_fields_cache: dict[str, list] = {}
 _extract_prompt_cache: dict[str, str] = {}
+
+
+_CN_PROVINCES = [
+	"北京市",
+	"天津市",
+	"上海市",
+	"重庆市",
+	"河北省",
+	"山西省",
+	"辽宁省",
+	"吉林省",
+	"黑龙江省",
+	"江苏省",
+	"浙江省",
+	"安徽省",
+	"福建省",
+	"江西省",
+	"山东省",
+	"河南省",
+	"湖北省",
+	"湖南省",
+	"广东省",
+	"海南省",
+	"四川省",
+	"贵州省",
+	"云南省",
+	"陕西省",
+	"甘肃省",
+	"青海省",
+	"台湾省",
+	"内蒙古自治区",
+	"广西壮族自治区",
+	"西藏自治区",
+	"宁夏回族自治区",
+	"新疆维吾尔自治区",
+	"香港特别行政区",
+	"澳门特别行政区",
+]
+
+_COMMON_FOREIGN_COUNTRIES = [
+	"马尔代夫",
+	"美国",
+	"英国",
+	"日本",
+	"韩国",
+	"俄罗斯",
+	"法国",
+	"德国",
+	"新加坡",
+	"澳大利亚",
+	"加拿大",
+	"意大利",
+	"西班牙",
+	"印度",
+	"越南",
+	"泰国",
+	"印度尼西亚",
+	"印尼",
+	"菲律宾",
+	"阿联酋",
+	"沙特",
+	"巴西",
+	"墨西哥",
+	"南非",
+	"埃及",
+	"土耳其",
+	"瑞士",
+	"荷兰",
+	"比利时",
+	"瑞典",
+	"挪威",
+	"芬兰",
+	"丹麦",
+	"新西兰",
+]
+
+
+@dataclass(frozen=True)
+class AddressParts:
+	country: str = ""
+	province: str = ""
+	city: str = ""
+	district: str = ""
+
+
+def _extract_country_from_text(text: str) -> str:
+	"""
+	尽量从地址文本中提取国家信息；若无法识别返回空字符串。
+	"""
+	s = (text or "").strip()
+	if not s:
+		return ""
+	if "中华人民共和国" in s or "中国" in s:
+		return "中国"
+
+	for name in _COMMON_FOREIGN_COUNTRIES:
+		if name and name in s:
+			return name
+	return ""
+
+
+def _parse_address_parts_from_detail(detail: str) -> AddressParts:
+	"""
+	从“详细地址（全地址）”中尽量解析出 country/province/city/district。
+	规则偏向中国地址；解析失败则返回空字符串。
+	"""
+	text = (detail or "").strip()
+	if not text:
+		return AddressParts()
+
+	# Country: explicit mention (or common foreign countries)
+	country = _extract_country_from_text(text)
+	# 若明确为非中国国家，则不再按中国行政区划规则解析省/市/区
+	if country and country != "中国":
+		return AddressParts(country=country, province="", city="", district="")
+
+	province = ""
+	for p in sorted(_CN_PROVINCES, key=len, reverse=True):
+		if p in text:
+			province = p
+			break
+
+	city = ""
+	district = ""
+
+	def _find_after(s: str, start_token: str, pattern: str) -> str:
+		if not s or not start_token or start_token not in s:
+			return ""
+		after = s.split(start_token, 1)[1]
+		m = re.search(pattern, after)
+		return m.group(1) if m else ""
+
+	# Municipality: city equals province
+	if province in {"北京市", "天津市", "上海市", "重庆市"}:
+		city = province
+		district = _find_after(text, province, r"^(.{1,20}?(?:区|县|旗))")
+	else:
+		if province:
+			city = _find_after(text, province, r"^(.{1,20}?(?:市|自治州|地区|盟))")
+		if not city:
+			m_city = re.search(r"(.{1,20}?(?:市|自治州|地区|盟))", text)
+			city = m_city.group(1) if m_city else ""
+
+		if city:
+			district = _find_after(text, city, r"^(.{1,20}?(?:区|县|旗))")
+
+	# 默认规则：当无法从 AddressDetail 识别国家信息时，默认中国
+	if not country:
+		country = "中国"
+
+	return AddressParts(country=country, province=province, city=city, district=district)
 
 TYPE_DEFAULTS = {
 	"string": "",
@@ -469,6 +621,21 @@ def compute_data_id(payload: dict) -> str:
 	data.pop("dataId", None)
 	raw = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 	return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _normalize_extracted_text(text: str) -> str:
+	"""
+	将提取到的长文本做最小归一化（不改变语义）：
+	- 统一换行符为 \\n
+	- 去掉行尾多余空白
+	- 连续空行压缩为最多 1 个空行
+	"""
+	s = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+	# strip trailing spaces per line
+	lines = [ln.rstrip() for ln in s.split("\n")]
+	s = "\n".join(lines).strip()
+	s = re.sub(r"\n{3,}", "\n\n", s)
+	return s
 
 
 def _unescape_control_chars_outside_strings(text: str) -> str:
@@ -739,9 +906,6 @@ def normalize_field_value(key: str, value: Any, field_type: str):
 
 	# string
 	text = "" if value is None else str(value).strip()
-	# 地址国家字段：默认中国（仅当提取为空时）
-	if key.endswith("Country") and not text:
-		return "中国"
 	if key in {"announcementDate", "bidOpenDate"}:
 		return normalize_date_ymd(text)
 	if key == "estimatedAmount":
@@ -919,11 +1083,65 @@ def _html_to_clean_markdown(html: str, site_name: str) -> str:
 	return md
 
 
-async def extract_page_markdown(browser_session: BrowserSession, site_name: str) -> str:
+def _html_to_clean_content_html(html: str, site_name: str) -> str:
 	"""
-	提取当前详情页的 DOM，并转为 Markdown（尽量保留表格、结构、链接等）。
+	Keep the original content (HTML) but aggressively remove non-content chrome.
 
-	说明：这里只做“抓取原文 + HTML→Markdown”转换，不依赖截图。
+	This preserves table structure for downstream processing, while avoiding
+	markdown conversion artifacts.
+	"""
+	if not html:
+		return ""
+	try:
+		from bs4 import BeautifulSoup
+	except Exception as e:  # pragma: no cover
+		logger.warning(f"[{site_name}] bs4 不可用，返回原始 HTML: {e}")
+		return html
+
+	soup = BeautifulSoup(html, "html.parser")
+
+	# Remove noisy nodes.
+	for el in soup.select(
+		"script,style,noscript,svg,canvas,header,nav,footer,aside,"
+		"form,input,button,select,option,textarea"
+	):
+		el.decompose()
+
+	# Drop hidden elements / dialogs.
+	for el in soup.select('[hidden], [aria-hidden="true"], [role="dialog"], [aria-modal="true"]'):
+		el.decompose()
+	for el in soup.select("[style]"):
+		style = (el.get("style") or "").replace(" ", "").lower()
+		if "display:none" in style or "visibility:hidden" in style:
+			el.decompose()
+
+	# Remove images (base64/site icons etc) — keep alt if present.
+	for img in soup.find_all("img"):
+		alt = (img.get("alt") or "").strip()
+		if alt:
+			img.replace_with(soup.new_string(alt))
+		else:
+			img.decompose()
+
+	# Convert iframes to links (some sites embed content in an iframe).
+	for iframe in soup.find_all("iframe"):
+		src = (iframe.get("src") or "").strip()
+		if not src:
+			iframe.decompose()
+			continue
+		p = soup.new_tag("p")
+		a = soup.new_tag("a", href=src)
+		a.string = src
+		p.append(a)
+		iframe.replace_with(p)
+
+	# Return a clean HTML fragment.
+	return str(soup)
+
+
+async def extract_page_content(browser_session: BrowserSession, site_name: str) -> str:
+	"""
+	提取当前详情页的“正文容器”HTML（尽量保留表格/结构），不做 Markdown 转换。
 	"""
 	try:
 		cdp_session = await browser_session.get_or_create_cdp_session()
@@ -1005,9 +1223,9 @@ async def extract_page_markdown(browser_session: BrowserSession, site_name: str)
 		if not html:
 			return ""
 
-		return _html_to_clean_markdown(html, site_name=site_name)
+		return _html_to_clean_content_html(html, site_name=site_name).strip()
 	except Exception as e:
-		logger.warning(f"[{site_name}] 提取/转换公告原文(MD)失败: {e}")
+		logger.warning(f"[{site_name}] 提取公告原文(HTML)失败: {e}")
 		return ""
 
 
@@ -1037,16 +1255,16 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 	tools = Tools()
 
 	@tools.action(
-		'保存当前详情页的公告原文(MD)和结构化字段到文件。在切换到详情页标签页后调用此工具。',
+		'保存当前详情页的公告正文原始内容(HTML)和结构化字段到文件。在切换到详情页标签页后调用此工具。',
 		param_model=SaveDetailParams
 	)
 	async def save_detail(params: SaveDetailParams, browser_session: BrowserSession):
 		"""
-		保存详情页公告原文(MD)和JSON结构化数据
+		保存详情页公告正文原始内容(HTML)和JSON结构化数据
 
 		会自动：
 		1. 获取当前页面URL
-		2. 抓取公告详情页DOM并转为Markdown
+		2. 抓取公告详情页正文原始内容（HTML，不转 Markdown）
 		3. 使用Agent提取详情字段（flat + lots）
 		4. 保存JSON文件（包含原文+字段）
 		"""
@@ -1076,9 +1294,9 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 			# 一些站点详情内容是异步渲染的，点击后需要额外等待
 			await asyncio.sleep(2)
 
-			# 4. 提取公告原文（Markdown）
-			announcement_md = await extract_page_markdown(browser_session, site_name)
-			if not announcement_md:
+			# 4. 提取公告原文（HTML，不做 Markdown 转换）
+			announcement_content = await extract_page_content(browser_session, site_name)
+			if not announcement_content:
 				return ActionResult(
 					extracted_content=f"提取公告原文失败: {title}",
 					error="提取公告原文失败"
@@ -1108,7 +1326,7 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 			result_data = {
 				"announcementUrl": detail_url,
 				"announcementName": title,
-				"announcementContentMd": announcement_md,
+				"announcementContent": announcement_content,
 
 				# LLM 字段
 				**flat_fields,
@@ -1124,6 +1342,29 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 
 			# 公告类别归一化（13 选 1）
 			result_data["announcementType"] = normalize_announcement_type(result_data.get("announcementType"))
+
+			# 地址字段：以“详细地址(全地址)”为唯一来源解析国家/省/市/区
+			for prefix in ("buyer", "project", "delivery"):
+				detail_key = f"{prefix}AddressDetail"
+				country_key = f"{prefix}Country"
+				province_key = f"{prefix}Province"
+				city_key = f"{prefix}City"
+				district_key = f"{prefix}District"
+
+				detail = (result_data.get(detail_key) or "").strip()
+				if not detail:
+					# 规则：当无法从 AddressDetail 识别国家信息时，国家默认“中国”（包含 AddressDetail 为空的情况）
+					result_data[country_key] = "中国"
+					result_data[province_key] = ""
+					result_data[city_key] = ""
+					result_data[district_key] = ""
+				else:
+					parts = _parse_address_parts_from_detail(detail)
+					# 规则：country 从 AddressDetail 识别不到时默认中国（_parse 已兜底）
+					result_data[country_key] = parts.country or "中国"
+					result_data[province_key] = parts.province
+					result_data[city_key] = parts.city
+					result_data[district_key] = parts.district
 
 			# 为单条结果生成稳定唯一标识（用于去重）
 			result_data["dataId"] = compute_data_id(result_data)
@@ -1143,7 +1384,7 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 
 			return ActionResult(
 				extracted_content=f"✓ 已保存: {filename}.json",
-				long_term_memory=f"已保存详情页原文(MD): {title[:30]}..."
+				long_term_memory=f"已保存详情页正文(HTML): {title[:30]}..."
 			)
 
 		except Exception as e:
