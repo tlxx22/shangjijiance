@@ -143,6 +143,10 @@ async def process_entire_site(
 
 ---
 
+IMPORTANT:
+- Do NOT use `write_file` / `replace_file` / `read_file` (e.g., todo.md/results.md) as business output or progress tracking.
+- The ONLY valid way to save/output an announcement is to call `save_detail` on the detail page.
+
 **【第一步：筛选操作】**
 
 在开始处理条目之前，请先进行以下筛选（如果页面有这些选项）：
@@ -400,6 +404,7 @@ async def process_all_page_items(
 			llm=llm,
 			browser=browser,
 			tools=tools,
+			extend_system_message=GLOBAL_RULES,
 			max_steps=max_items_per_page * 8,  # 每个条目大约需要8步：滚动+点击+switch+等待+save_detail+close+返回列表+下一个
 			step_timeout=240,
 		)
@@ -539,6 +544,7 @@ async def find_and_click_next_item(
 			task=task,
 			llm=llm,
 			browser=browser,
+			extend_system_message=GLOBAL_RULES,
 			max_steps=3,  # 滚动(1) + 点击(1) + 返回(1)，无翻页余地
 			step_timeout=240,
 		)
@@ -652,6 +658,7 @@ async def goto_next_page(browser, llm, site_name: str, current_page: int) -> boo
 			""",
 			llm=llm,
 			browser=browser,
+			extend_system_message=GLOBAL_RULES,
 			max_steps=3,
 			step_timeout=240,
 		)
@@ -770,6 +777,7 @@ async def analyze_and_filter_page(
 			task=task,
 			llm=llm,
 			browser=browser,
+			extend_system_message=GLOBAL_RULES,
 			max_steps=8,
 			step_timeout=240,
 		)

@@ -436,6 +436,8 @@ from pydantic import BaseModel, Field
 from browser_use import Agent
 from browser_use.tools.service import Tools
 from .config_manager import load_extract_fields, generate_extract_prompt
+from .prompts import GLOBAL_RULES
+from .extract_client import chat_completion
 from .field_schemas import (
 	LotProducts,
 	LotCandidates,
@@ -764,6 +766,7 @@ async def extract_fields_from_page(browser_session, llm, site_name: str, stage: 
 			""",
 			llm=llm,
 			browser=browser_session,
+			extend_system_message=GLOBAL_RULES,
 			max_steps=2,
 			step_timeout=240,
 		)
@@ -861,6 +864,135 @@ async def extract_fields_from_page(browser_session, llm, site_name: str, stage: 
 	except Exception as e:
 		logger.error(f"[{site_name}] 字段提取失败（stage={stage}）: {e}")
 		return empty_result
+
+
+def _parse_extracted_fields_output(output: Any, *, site_name: str, stage: str, fields: list) -> dict:
+	"""
+	Parse and normalize a model output into our expected field dict.
+	Reuses the same tolerant JSON/YAML parsing and normalize_field_value logic.
+	"""
+	empty_result = {f.key: TYPE_DEFAULTS.get(f.type, "") for f in fields}
+
+	if not output:
+		logger.warning(f"[{site_name}] 字段提取无返回（stage={stage}）")
+		return empty_result
+
+	output_str = str(output).strip()
+
+	# 处理转义引号（LLM 输出可能包含 \\\" 而非 \"）
+	if '\\"' in output_str:
+		output_str = output_str.replace('\\"', '"')
+
+	# 移除可能的 markdown 代码块标识
+	output_str = re.sub(r'^```json\\s*', '', output_str)
+	output_str = re.sub(r'^```\\s*', '', output_str)
+	output_str = re.sub(r'\\s*```$', '', output_str)
+
+	# 提取 JSON/YAML 片段：优先 {..}，否则 [..]，否则尝试整段解析
+	obj_start = output_str.find('{')
+	obj_end = output_str.rfind('}')
+	arr_start = output_str.find('[')
+	arr_end = output_str.rfind(']')
+
+	if obj_start != -1 and obj_end > obj_start:
+		snippet = output_str[obj_start:obj_end + 1]
+	elif arr_start != -1 and arr_end > arr_start:
+		snippet = output_str[arr_start:arr_end + 1]
+	else:
+		snippet = output_str
+
+	# 去掉常见的结尾多余逗号（LLM 有时会输出 trailing comma）
+	snippet = re.sub(r',(\s*[}\]])', r'\1', snippet)
+
+	# 有些输出会包含字面量 "\\n"（而非真实换行），先做一次安全还原
+	snippet = _unescape_control_chars_outside_strings(snippet)
+
+	# 先按严格 JSON 解析，失败则降级为 YAML（容忍单引号/不加引号 key）
+	try:
+		extracted = json.loads(snippet)
+	except json.JSONDecodeError as e_json:
+		try:
+			extracted = yaml.safe_load(snippet)
+			if extracted is None:
+				extracted = {}
+		except Exception as e_yaml:
+			logger.warning(f"[{site_name}] JSON/YAML 解析失败（stage={stage}）: {e_json} / {e_yaml}")
+			return empty_result
+
+	# stage=lots 允许 LLM 直接返回数组，按内容推断属于哪个字段
+	if stage == "lots" and isinstance(extracted, list):
+		candidate_marker_keys = {"candidates", "candidatePrices", "candidate_prices", "winner", "winningAmount", "winning_amount"}
+		has_candidate_keys = any(isinstance(x, dict) and any(k in x for k in candidate_marker_keys) for x in extracted)
+		extracted = {
+			"lotProducts": [] if has_candidate_keys else extracted,
+			"lotCandidates": extracted if has_candidate_keys else [],
+		}
+
+	if not isinstance(extracted, dict):
+		logger.warning(f"[{site_name}] 解析结果不是对象（stage={stage}），返回空值")
+		return empty_result
+
+	# 顶层 key 容错：支持 snake_case
+	for f in fields:
+		if f.key in extracted:
+			continue
+		snake = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', f.key).lower()
+		if snake in extracted:
+			extracted[f.key] = extracted.get(snake)
+
+	normalized: dict = {}
+	for f in fields:
+		raw_value = extracted.get(f.key, TYPE_DEFAULTS.get(f.type, ""))
+		normalized[f.key] = normalize_field_value(f.key, raw_value, f.type)
+
+	return normalized
+
+
+async def extract_fields_from_html(html: str, *, site_name: str, stage: str) -> dict:
+	"""
+	Use DeepSeek-V3.2 (OpenAI protocol via SiliconFlow/SANY gateway) to extract fields from a single HTML blob.
+	Only replaces the *detail field extraction* step; navigation still uses browser-use model.
+	"""
+	stage = (stage or "").strip() or "flat"
+	extract_prompt = get_extract_prompt(stage)
+	fields = get_extract_fields(stage)
+	if not extract_prompt or not fields:
+		return {}
+
+	html = (html or "").strip()
+	empty_result = {f.key: TYPE_DEFAULTS.get(f.type, "") for f in fields}
+	if not html:
+		return empty_result
+
+	system_prompt = f"""
+You are an information extraction engine.
+You will be given an HTML snippet of a tender/notice detail page.
+Extract the requested fields according to the schema below and return ONLY valid JSON.
+No markdown, no code fences, no extra text.
+
+{extract_prompt}
+
+Rules:
+- Fill missing fields with the correct empty value by type (string=\"\", number=null, array=[]).
+- Money amounts are in 单位“万元”.
+- Dates are YYYY-MM-DD.
+""".strip()
+
+	user_prompt = f"HTML:\\n{html}"
+
+	try:
+		output = await asyncio.to_thread(
+			chat_completion,
+			[
+				{"role": "system", "content": system_prompt},
+				{"role": "user", "content": user_prompt},
+			],
+		)
+	except Exception as e:
+		logger.warning(f"[{site_name}] DeepSeek 字段提取调用失败（stage={stage}）: {e}")
+		return empty_result
+
+	return _parse_extracted_fields_output(output, site_name=site_name, stage=stage, fields=fields)
 
 
 def normalize_field_value(key: str, value: Any, field_type: str):
@@ -1305,10 +1437,11 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 			# 5. 两次提取：flat + lots（如果提供了 llm）
 			flat_fields: dict = {}
 			lot_fields: dict = {"lotProducts": [], "lotCandidates": []}
-			if llm is not None:
-				flat_fields = await extract_fields_from_page(browser_session, llm, site_name, stage="flat")
-				lot_fields = await extract_fields_from_page(browser_session, llm, site_name, stage="lots")
-				flat_fields.pop("updateDate", None)
+			# 字段提取改用 DeepSeek-V3.2：将详情页正文 HTML 作为整体输入，让模型一次性解析输出字段 JSON
+			# 仅替换“字段提取”步骤；页面操作/导航仍然由 browser-use Agent 完成。
+			flat_fields = await extract_fields_from_html(announcement_content, site_name=site_name, stage="flat")
+			lot_fields = await extract_fields_from_html(announcement_content, site_name=site_name, stage="lots")
+			flat_fields.pop("updateDate", None)
 
 			# 兜底：确保数组字段存在
 			lot_products = lot_fields.get("lotProducts") or []

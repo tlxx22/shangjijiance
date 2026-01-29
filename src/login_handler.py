@@ -6,6 +6,7 @@
 from browser_use import Agent, BrowserSession
 from .config_manager import SiteConfig
 from .logger_config import get_logger
+from .prompts import GLOBAL_RULES
 
 logger = get_logger()
 
@@ -44,6 +45,7 @@ async def smart_login(site_config: SiteConfig, browser, llm) -> bool:
 		""",
 		llm=llm,
 		browser=browser,
+		extend_system_message=GLOBAL_RULES,
 		max_steps=3,
 		step_timeout=240,
 	)
@@ -144,6 +146,7 @@ async def auto_login(site_config: SiteConfig, browser, llm) -> bool:
 				""",
 				llm=llm,
 				browser=browser,
+				extend_system_message=GLOBAL_RULES,
 				use_vision=True,  # 启用vision用于验证码识别
 				max_steps=10,
 				step_timeout=240,

@@ -14,6 +14,7 @@ from trans import build_llm
 from .config_manager import SiteConfig, get_user_data_dir
 from .login_handler import smart_login
 from .list_processor import process_entire_site
+from .prompts import GLOBAL_RULES
 from .logger_config import get_logger
 
 logger = get_logger()
@@ -83,6 +84,7 @@ async def get_iframe_url(browser, llm, site_name: str) -> str:
 			""",
 			llm=llm,
 			browser=browser,
+			extend_system_message=GLOBAL_RULES,
 			max_steps=3,
 			step_timeout=240,
 		)
@@ -163,6 +165,7 @@ async def check_page_security(browser, llm, site_name: str) -> bool:
 			""",
 			llm=llm,
 			browser=browser,
+			extend_system_message=GLOBAL_RULES,
 			max_steps=2,
 			step_timeout=240,
 		)
@@ -233,6 +236,7 @@ async def enter_list_page(browser, llm, site_name: str) -> bool:
 			""",
 			llm=llm,
 			browser=browser,
+			extend_system_message=GLOBAL_RULES,
 			max_steps=5,
 			step_timeout=240,
 		)
@@ -386,6 +390,7 @@ async def process_site(
 					""",
 					llm=llm,
 					browser=browser,
+					extend_system_message=GLOBAL_RULES,
 					initial_actions=[{'navigate': {'url': iframe_url}}],
 					max_steps=1,
 					step_timeout=240,

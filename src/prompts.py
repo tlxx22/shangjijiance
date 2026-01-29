@@ -8,6 +8,15 @@ GLOBAL_RULES = """
 
 ---
 
+**IMPORTANT: business output must go through our toolchain**
+
+- When you are on a detail page and need to "save/output" an announcement, you MUST call `save_detail` (this is the only action that triggers backend persistence + SSE item output).
+- `write_file` / `replace_file` / `read_file` are NOT disabled, but do not call them unless explicitly asked for debugging; never use them as a substitute for `save_detail`.
+- Do not create or maintain `todo.md` / `results.md` as progress or deliverables. Those files are not consumed by the backend and do not count as saved items.
+- If you notice you are writing files instead of calling `save_detail`, stop writing files immediately and return to the main flow: `switch/wait -> save_detail -> close/switch (or go_back)`.
+
+---
+
 **【全局规则 - 所有操作必须遵守】**
 
 **1. 标签页操作规范**
