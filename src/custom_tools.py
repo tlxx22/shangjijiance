@@ -948,6 +948,98 @@ def _parse_extracted_fields_output(output: Any, *, site_name: str, stage: str, f
 	return normalized
 
 
+def _sanitize_html_for_extraction(html: str, *, site_name: str, max_chars: int = 200_000) -> str:
+	"""
+	Lightweight, non-LLM HTML cleanup before sending to DeepSeek for field extraction.
+
+	Goals:
+	- Remove obvious noise (scripts/styles/nav/footer/meta/etc).
+	- Strip attributes (style/class/id) that add tokens but not semantics.
+	- Preserve structural tags, especially tables, so the model can read tabular data.
+	"""
+	html = (html or "").strip()
+	if not html:
+		return ""
+
+	try:
+		from bs4 import BeautifulSoup, Comment
+	except Exception as e:  # pragma: no cover
+		# Fallback: minimal cleanup without bs4.
+		logger.warning(f"[{site_name}] bs4 不可用，跳过 HTML 清洗: {e}")
+		return html[:max_chars] if max_chars and len(html) > max_chars else html
+
+	soup = BeautifulSoup(html, "html.parser")
+
+	# Remove comments.
+	for c in soup.find_all(string=lambda x: isinstance(x, Comment)):
+		c.extract()
+
+	# Remove very noisy / non-content tags.
+	for el in soup.select(
+		"script,style,noscript,svg,canvas,header,nav,footer,aside,"
+		"form,input,button,select,option,textarea,meta,link,title,head"
+	):
+		el.decompose()
+
+	# Remove hidden nodes.
+	for el in soup.select('[hidden], [aria-hidden="true"], [role="dialog"], [aria-modal="true"]'):
+		el.decompose()
+	for el in soup.select("[style]"):
+		style = (el.get("style") or "").replace(" ", "").lower()
+		if "display:none" in style or "visibility:hidden" in style:
+			el.decompose()
+
+	# Drop inline/base64 images; keep alt text if present.
+	for img in soup.find_all("img"):
+		alt = (img.get("alt") or "").strip()
+		if alt:
+			img.replace_with(soup.new_string(alt))
+		else:
+			img.decompose()
+
+	# Unwrap token-heavy inline tags; keep their text/content.
+	for tag_name in ("span", "font"):
+		for el in soup.find_all(tag_name):
+			el.unwrap()
+
+	# Strip most attributes to reduce tokens; preserve a[href] and table cell spans.
+	for el in soup.find_all(True):
+		attrs = dict(el.attrs or {})
+		keep: dict[str, str] = {}
+		if el.name == "a":
+			href = attrs.get("href")
+			if href:
+				keep["href"] = href
+		if el.name in {"td", "th"}:
+			for k in ("rowspan", "colspan"):
+				v = attrs.get(k)
+				if v is not None:
+					keep[k] = str(v)
+		el.attrs = keep
+
+	# Normalize text nodes: collapse non-breaking spaces.
+	for t in soup.find_all(string=True):
+		if isinstance(t, str):
+			t.replace_with(t.replace("\xa0", " "))
+
+	clean = str(soup)
+
+	# Merge adjacent formatting/paragraph tags to reduce token noise.
+	# Example: <strong>..</strong><strong>..</strong> -> <strong>....</strong>
+	# Example: <p>..</p><p>..</p> -> <p>....</p>
+	clean = re.sub(r"</strong>\s*<strong>", "", clean, flags=re.IGNORECASE)
+	clean = re.sub(r"</p>\s*<p>", "", clean, flags=re.IGNORECASE)
+	# Remove <br> line breaks to reduce token noise.
+	clean = re.sub(r"<br\s*/?>", "", clean, flags=re.IGNORECASE)
+
+	# Hard cap to avoid extremely large prompts.
+	if max_chars and len(clean) > max_chars:
+		logger.info(f"[{site_name}] HTML 清洗后仍过长，截断到 {max_chars} 字符用于字段抽取")
+		clean = clean[:max_chars]
+
+	return clean.strip()
+
+
 async def extract_fields_from_html(html: str, *, site_name: str, stage: str) -> dict:
 	"""
 	Use DeepSeek-V3.2 (OpenAI protocol via SiliconFlow/SANY gateway) to extract fields from a single HTML blob.
@@ -959,7 +1051,7 @@ async def extract_fields_from_html(html: str, *, site_name: str, stage: str) -> 
 	if not extract_prompt or not fields:
 		return {}
 
-	html = (html or "").strip()
+	html = _sanitize_html_for_extraction(html, site_name=site_name)
 	empty_result = {f.key: TYPE_DEFAULTS.get(f.type, "") for f in fields}
 	if not html:
 		return empty_result

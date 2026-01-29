@@ -20,8 +20,11 @@ from browser_use.llm.openai.chat import ChatOpenAI
 # - "sany": call SANY AI Gateway (OpenAI-compatible)
 ROUTE: Literal["official", "sany"] = "official"
 
-# Model name. Change this to the model name registered on the gateway if needed.
-MODEL_NAME = "bu-latest"
+# Model names (hard-coded as requested; do not use env vars).
+# - official: browser-use cloud
+# - sany: SANY gateway (OpenAI-compatible)
+OFFICIAL_MODEL_NAME = "bu-latest"
+SANY_MODEL_NAME = "bu-30b-a3b-preview"
 
 
 def build_llm() -> BaseChatModel:
@@ -31,7 +34,7 @@ def build_llm() -> BaseChatModel:
 		# - API Key: BROWSER_USE_API_KEY
 		# - Base URL: BROWSER_USE_LLM_URL (optional, defaults to https://llm.api.browser-use.com)
 		return ChatBrowserUse(
-			model=MODEL_NAME,
+			model=OFFICIAL_MODEL_NAME,
 			api_key=os.getenv("BROWSER_USE_API_KEY"),
 			base_url=os.getenv("BROWSER_USE_LLM_URL"),
 		)
@@ -59,7 +62,7 @@ def build_llm() -> BaseChatModel:
 		# For max compatibility we embed the schema into the system prompt and do not
 		# force response_format.
 		return ChatOpenAI(
-			model=MODEL_NAME,
+			model=SANY_MODEL_NAME,
 			api_key=api_key,
 			base_url=base_url,
 			default_headers=default_headers or None,
