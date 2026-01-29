@@ -21,7 +21,7 @@ from browser_use.llm.openai.chat import ChatOpenAI
 ROUTE: Literal["official", "sany"] = "official"
 
 # Model name. Change this to the model name registered on the gateway if needed.
-MODEL_NAME = "bu-2-0"
+MODEL_NAME = "bu-latest"
 
 
 def build_llm() -> BaseChatModel:
