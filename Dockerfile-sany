@@ -1,5 +1,5 @@
 # 三一正式环境 Dockerfile
-FROM devops-harbor.sany.com.cn/devops/crawler-agent-base:stable
+FROM devops-harbor.sany.com.cn/sany-digitalsales/wdcl-crawler-agent-base:stable
 
 LABEL maintainer="yunwei@yaowutech.com"
 
