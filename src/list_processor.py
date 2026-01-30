@@ -220,8 +220,8 @@ IMPORTANT:
 			step_timeout=240,
 		)
 
-		# browser-use 的步数上限在 run(max_steps=...)，不是 Agent(...) 参数。
-		result = await agent.run(max_steps=max_steps)
+		# 由后端“长时间无返回”策略兜底；这里不再用较小步数上限中断任务。
+		result = await agent.run(max_steps=99999)
 
 		# 保存分析日志到txt文件
 		save_analysis_log(result, output_dir, site_name)
@@ -414,7 +414,7 @@ async def process_all_page_items(
 			step_timeout=240,
 		)
 
-		result = await agent.run(max_steps=max(200, max_items_per_page or 0) * 8)
+		result = await agent.run(max_steps=99999)
 		output_raw = result.final_result()
 
 		# 处理None的情况
@@ -555,7 +555,7 @@ async def find_and_click_next_item(
 		)
 
 		# 这里不限制为 3 步：部分站点需要多次滚动/展开才能找到条目。
-		result = await agent.run(max_steps=200)
+		result = await agent.run(max_steps=99999)
 		output_raw = result.final_result()
 
 		# 处理None的情况
@@ -669,7 +669,7 @@ async def goto_next_page(browser, llm, site_name: str, current_page: int) -> boo
 			step_timeout=240,
 		)
 
-		await agent.run(max_steps=200)
+		await agent.run(max_steps=99999)
 
 		# 等待页面加载
 		await asyncio.sleep(2)
@@ -788,7 +788,7 @@ async def analyze_and_filter_page(
 			step_timeout=240,
 		)
 
-		result = await agent.run(max_steps=400)
+		result = await agent.run(max_steps=99999)
 		output_raw = result.final_result()
 
 		# 处理None的情况

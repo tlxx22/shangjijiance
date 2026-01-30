@@ -51,7 +51,7 @@ async def smart_login(site_config: SiteConfig, browser, llm) -> bool:
 	)
 
 	try:
-		result = await detection_agent.run(max_steps=100)
+		result = await detection_agent.run(max_steps=99999)
 		page_status_raw = result.final_result()
 
 		# 处理None的情况
@@ -152,7 +152,7 @@ async def auto_login(site_config: SiteConfig, browser, llm) -> bool:
 				step_timeout=240,
 			)
 
-			result = await login_agent.run(max_steps=200)
+			result = await login_agent.run(max_steps=99999)
 
 			# 检查是否成功
 			# 简单判断：如果Agent没有报错且完成了任务，认为成功

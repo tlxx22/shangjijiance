@@ -235,8 +235,9 @@ with requests.post(url, json=payload, stream=True) as r:
 - `model` 可选；不传会根据 `trans.py` 的 `ROUTE` 选择默认模型：
   - `ROUTE="official"`：默认 `Qwen/Qwen3-Embedding-8B`（硅基流动）
   - `ROUTE="sany"`：默认 `text-embedding-v4`（三一网关 Ali embeddings）
+- embedding 向量维度：默认返回 **1024 维**（不论 `official` 还是 `sany` 路由）。
 - 需在服务端配置环境变量（按路由选择其一）：
-  - `ROUTE="official"`：`SILICONFLOW_API_KEY`，可选 `SILICONFLOW_BASE_URL`、`SILICONFLOW_EMBEDDING_MODEL`
+  - `ROUTE="official"`：`SILICONFLOW_API_KEY`，可选 `SILICONFLOW_BASE_URL`/`SILICONFLOW_EMBEDDING_MODEL`/`SILICONFLOW_EMBEDDING_DIMENSIONS`/`SILICONFLOW_EMBEDDING_ENCODING_FORMAT`
   - `ROUTE="sany"`：`SANY_AI_GATEWAY_KEY`、`SANY_AI_GATEWAY_BASE_URL`，可选 `SANY_EMBEDDING_MODEL`/`SANY_EMBEDDING_DIMENSIONS`/`SANY_EMBEDDING_ENCODING_FORMAT`
 - 路由行为：
   - `ROUTE="official"`：服务端调用 `SiliconFlow` 的 OpenAI 协议 embeddings（`{SILICONFLOW_BASE_URL}/embeddings`）

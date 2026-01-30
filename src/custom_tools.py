@@ -813,7 +813,7 @@ async def extract_fields_from_page(browser_session, llm, site_name: str, stage: 
 			step_timeout=240,
 		)
 
-		result = await extract_agent.run(max_steps=50)
+		result = await extract_agent.run(max_steps=99999)
 		output = result.final_result()
 
 		if not output:

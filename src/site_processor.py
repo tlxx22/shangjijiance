@@ -89,7 +89,7 @@ async def get_iframe_url(browser, llm, site_name: str) -> str:
 			step_timeout=240,
 		)
 
-		result = await extract_agent.run(max_steps=100)
+		result = await extract_agent.run(max_steps=99999)
 		iframe_url_raw = result.final_result()
 
 		# 从返回结果中提取URL
@@ -170,7 +170,7 @@ async def check_page_security(browser, llm, site_name: str) -> bool:
 			step_timeout=240,
 		)
 
-		result = await security_agent.run(max_steps=50)
+		result = await security_agent.run(max_steps=99999)
 		output = result.final_result()
 
 		if output:
@@ -241,7 +241,7 @@ async def enter_list_page(browser, llm, site_name: str) -> bool:
 			step_timeout=240,
 		)
 
-		result = await enter_agent.run(max_steps=100)
+		result = await enter_agent.run(max_steps=99999)
 		output = result.final_result()
 
 		if output:
@@ -395,7 +395,7 @@ async def process_site(
 					max_failures=5,
 					step_timeout=240,
 				)
-				await nav_agent.run(max_steps=30)
+				await nav_agent.run(max_steps=99999)
 
 				# 【安全检查2】iframe 导航后检查页面安全
 				if not await check_page_security(browser, llm, site_name):

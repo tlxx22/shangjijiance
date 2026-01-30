@@ -10,6 +10,8 @@ import trans
 
 DEFAULT_SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 DEFAULT_SILICONFLOW_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-8B"
+DEFAULT_SILICONFLOW_EMBEDDING_DIMENSIONS = 1024
+DEFAULT_SILICONFLOW_EMBEDDING_ENCODING_FORMAT = "float"
 
 DEFAULT_SANY_EMBEDDING_MODEL = "text-embedding-v4"
 DEFAULT_SANY_EMBEDDING_DIMENSIONS = 1024
@@ -35,6 +37,22 @@ def _normalize_sany_ali_base_url(base_url: str) -> str:
 	if u.endswith("/ai-api/ali/embeddings"):
 		return u[: -len("/embeddings")]
 	return u
+
+
+def _ensure_embedding_dimensions(embedding: list[float], dims: int) -> list[float]:
+	"""
+	Ensure returned embedding vector is exactly `dims` long.
+
+	- If longer: truncate
+	- If shorter: right-pad with 0.0
+	"""
+	if dims <= 0:
+		return embedding
+	if len(embedding) == dims:
+		return embedding
+	if len(embedding) > dims:
+		return embedding[:dims]
+	return embedding + [0.0] * (dims - len(embedding))
 
 
 def get_text_embedding(
@@ -73,9 +91,14 @@ def get_text_embedding(
 		enc = (encoding_format or os.getenv("SANY_EMBEDDING_ENCODING_FORMAT") or DEFAULT_SANY_EMBEDDING_ENCODING_FORMAT).strip()
 
 		client = OpenAI(api_key=api_key, base_url=base_url)
-		resp: Any = client.embeddings.create(model=model_name, input=text, dimensions=dims, encoding_format=enc)
+		try:
+			resp: Any = client.embeddings.create(model=model_name, input=text, dimensions=dims, encoding_format=enc)
+		except Exception:
+			# Some OpenAI-compatible providers/models may not support (dimensions, encoding_format).
+			# Fall back to a plain request and then shape the vector to the requested length.
+			resp = client.embeddings.create(model=model_name, input=text)
 		embedding = resp.data[0].embedding
-		return model_name, embedding
+		return model_name, _ensure_embedding_dimensions(embedding, dims)
 
 	# default: official
 	api_key = os.getenv("SILICONFLOW_API_KEY") or os.getenv("SILICONFLOW_KEY")
@@ -84,10 +107,17 @@ def get_text_embedding(
 
 	base_url = os.getenv("SILICONFLOW_BASE_URL", DEFAULT_SILICONFLOW_BASE_URL).strip()
 	model_name = (model or os.getenv("SILICONFLOW_EMBEDDING_MODEL") or DEFAULT_SILICONFLOW_EMBEDDING_MODEL).strip()
+	dims = dimensions or int(os.getenv("SILICONFLOW_EMBEDDING_DIMENSIONS") or DEFAULT_SILICONFLOW_EMBEDDING_DIMENSIONS)
+	enc = (encoding_format or os.getenv("SILICONFLOW_EMBEDDING_ENCODING_FORMAT") or DEFAULT_SILICONFLOW_EMBEDDING_ENCODING_FORMAT).strip()
 
 	client = OpenAI(api_key=api_key, base_url=base_url)
-	resp: Any = client.embeddings.create(model=model_name, input=text)
+	try:
+		resp: Any = client.embeddings.create(model=model_name, input=text, dimensions=dims, encoding_format=enc)
+	except Exception:
+		# Some OpenAI-compatible providers/models may not support (dimensions, encoding_format).
+		# Fall back to a plain request and then shape the vector to the requested length.
+		resp = client.embeddings.create(model=model_name, input=text)
 
 	# OpenAI-compatible response: resp.data[0].embedding -> list[float]
 	embedding = resp.data[0].embedding
-	return model_name, embedding
+	return model_name, _ensure_embedding_dimensions(embedding, dims)
