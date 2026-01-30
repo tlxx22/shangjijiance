@@ -85,11 +85,11 @@ async def get_iframe_url(browser, llm, site_name: str) -> str:
 			llm=llm,
 			browser=browser,
 			extend_system_message=GLOBAL_RULES,
-			max_steps=3,
+			max_failures=5,
 			step_timeout=240,
 		)
 
-		result = await extract_agent.run()
+		result = await extract_agent.run(max_steps=100)
 		iframe_url_raw = result.final_result()
 
 		# 从返回结果中提取URL
@@ -166,11 +166,11 @@ async def check_page_security(browser, llm, site_name: str) -> bool:
 			llm=llm,
 			browser=browser,
 			extend_system_message=GLOBAL_RULES,
-			max_steps=2,
+			max_failures=5,
 			step_timeout=240,
 		)
 
-		result = await security_agent.run()
+		result = await security_agent.run(max_steps=50)
 		output = result.final_result()
 
 		if output:
@@ -237,11 +237,11 @@ async def enter_list_page(browser, llm, site_name: str) -> bool:
 			llm=llm,
 			browser=browser,
 			extend_system_message=GLOBAL_RULES,
-			max_steps=5,
+			max_failures=5,
 			step_timeout=240,
 		)
 
-		result = await enter_agent.run()
+		result = await enter_agent.run(max_steps=100)
 		output = result.final_result()
 
 		if output:
@@ -392,10 +392,10 @@ async def process_site(
 					browser=browser,
 					extend_system_message=GLOBAL_RULES,
 					initial_actions=[{'navigate': {'url': iframe_url}}],
-					max_steps=1,
+					max_failures=5,
 					step_timeout=240,
 				)
-				await nav_agent.run()
+				await nav_agent.run(max_steps=30)
 
 				# 【安全检查2】iframe 导航后检查页面安全
 				if not await check_page_security(browser, llm, site_name):

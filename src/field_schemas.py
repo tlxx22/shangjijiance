@@ -448,19 +448,15 @@ class LotProducts(RootModel[list[LotProduct]]):
 # ===== lotCandidates =====
 
 class LotCandidate(BaseModel):
-	"""标段候选/中标信息"""
+	"""标段：中标/中标候选人/非中标候选人信息（按行展开）"""
 
 	model_config = ConfigDict(extra="ignore")
 
 	lotNumber: str = Field(default="标段一", validation_alias=AliasChoices("lotNumber", "标段号", "lot_number"))
 	lotName: str = Field(default="", validation_alias=AliasChoices("lotName", "标段名", "lot_name"))
+	type: str = Field(default="", validation_alias=AliasChoices("type", "类型", "候选类型", "中标类型"))
 	candidates: str = Field(default="", validation_alias=AliasChoices("candidates", "候选单位"))
 	candidatePrices: str = Field(default="", validation_alias=AliasChoices("candidatePrices", "候选单位报价", "报价"))
-	winner: str = Field(default="", validation_alias=AliasChoices("winner", "中标单位", "成交单位"))
-	winningAmount: Optional[float] = Field(
-		default=None,
-		validation_alias=AliasChoices("winningAmount", "中标金额", "成交金额", "中标价", "成交价"),
-	)
 
 	@field_validator("lotNumber", mode="before")
 	@classmethod
@@ -468,10 +464,28 @@ class LotCandidate(BaseModel):
 		text = _join_list(v)
 		return text or "标段一"
 
-	@field_validator("lotName", "winner", mode="before")
+	@field_validator("lotName", mode="before")
 	@classmethod
 	def _strip_text(cls, v: Any) -> str:
 		return _join_list(v)
+
+	@field_validator("type", mode="before")
+	@classmethod
+	def _candidate_type(cls, v: Any) -> str:
+		s = _join_list(v)
+		if not s:
+			return ""
+		s = s.strip()
+		if s in {"中标", "中标候选人", "非中标候选人"}:
+			return s
+		# Heuristic normalization (no guessing beyond the label itself).
+		if "否决" in s or "无效" in s or "未中标" in s or "落标" in s or "不通过" in s or "未通过" in s:
+			return "非中标候选人"
+		if "候选" in s:
+			return "中标候选人"
+		if "中标" in s or "成交" in s or "中选" in s:
+			return "中标"
+		return ""
 
 	@field_validator("candidatePrices", mode="before")
 	@classmethod
@@ -484,11 +498,6 @@ class LotCandidate(BaseModel):
 	def _text_single(cls, v: Any) -> str:
 		parts = _to_str_list(v)
 		return parts[0] if parts else ""
-
-	@field_validator("winningAmount", mode="before")
-	@classmethod
-	def _winning_amount(cls, v: Any) -> Optional[float]:
-		return _normalize_wan_yuan_number(v)
 
 
 class LotCandidates(RootModel[list[LotCandidate]]):
@@ -525,6 +534,9 @@ class LotCandidates(RootModel[list[LotCandidate]]):
 		for item in items:
 			lot_number = _join_list(item.get("lotNumber")) or "标段一"
 			lot_name = _join_list(item.get("lotName"))
+			declared_type = _join_list(item.get("type"))
+
+			# Backward compatibility: old schema fields (winner/winningAmount) may still appear.
 			winner = _join_list(item.get("winner"))
 			winning_amount = _normalize_wan_yuan_number(item.get("winningAmount"))
 
@@ -535,18 +547,33 @@ class LotCandidates(RootModel[list[LotCandidate]]):
 			keep_one = row_count > 0 or bool(winner) or (winning_amount is not None)
 			if not keep_one:
 				continue
+
+			# Old pages sometimes only have winner without an explicit candidate list.
+			# Convert that into one row (no guessing beyond extracted fields).
+			if row_count <= 0 and winner:
+				candidates = [winner]
+				if winning_amount is not None:
+					candidate_prices = [f"{winning_amount:.2f}"]
+				else:
+					candidate_prices = [""]
+				row_count = 1
 			if row_count <= 0:
 				row_count = 1
 
 			for idx in range(row_count):
+				candidate_value = _pick(candidates, idx)
+				type_value = declared_type
+				if not type_value and winner:
+					# Deterministic mapping from old fields: if this row matches the winner, mark as "中标",
+					# otherwise it's part of the candidate list.
+					type_value = "中标" if (candidate_value and candidate_value == winner) else "中标候选人"
 				out.append(
 					{
 						"lotNumber": lot_number,
 						"lotName": lot_name,
-						"candidates": _pick(candidates, idx),
+						"type": type_value,
+						"candidates": candidate_value,
 						"candidatePrices": _pick(candidate_prices, idx),
-						"winner": winner,
-						"winningAmount": winning_amount,
 					}
 				)
 		return out

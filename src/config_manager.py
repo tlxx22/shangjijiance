@@ -168,9 +168,10 @@ def generate_extract_prompt(fields: List[ExtractField], stage: str) -> str:
 	elif stage == "lots":
 		lines.append("**额外规则：**")
 		lines.append("- lotProducts/lotCandidates 必须返回数组；未提及则返回 []")
-		lines.append("- lotNumber 若页面未写明，填 \"标段一\"（不要留空）")
+		lines.append("- lotNumber 必须是“标段号”，格式为“标段一/标段二/...”；若页面未写明，填 \"标段一\"（不要留空）")
+		lines.append("- 严禁把项目编号/招标编号/公告编号（如 CEZB****）填到 lotNumber")
 		lines.append("- lotProducts：每个元素表示一条“标的物行”，subjects/models/unitPrices/quantities/productCategory 均为 string；如有多条标的物，输出多个元素（可复用相同 lotNumber/lotName）")
-		lines.append("- lotCandidates：每个元素表示一条“候选单位行”，candidates/candidatePrices 为 string；如有多家候选单位，输出多个元素（winner/winningAmount 可在每条重复）")
+		lines.append("- lotCandidates：每个元素表示一条“单位行”，包含 type（中标/中标候选人/非中标候选人）+ candidates/candidatePrices（均为 string）；如有多行，输出多个元素")
 		lines.append("- unitPrices/candidatePrices 单位为“万元”，保留两位小数；不要用逗号拼接多个值到同一个字段里")
 		lines.append("- productCategory：按“具体产品表”匹配 subjects，匹配到则填该行的标准名称（每行第一个词），匹配不到填 \"\"")
 		lines.append("")

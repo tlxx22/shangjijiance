@@ -216,11 +216,12 @@ IMPORTANT:
 			tools=tools,
 			output_model_schema=ProcessResult,
 			extend_system_message=GLOBAL_RULES,
-			max_steps=max_steps,
+			max_failures=10,
 			step_timeout=240,
 		)
 
-		result = await agent.run()
+		# browser-use 的步数上限在 run(max_steps=...)，不是 Agent(...) 参数。
+		result = await agent.run(max_steps=max_steps)
 
 		# 保存分析日志到txt文件
 		save_analysis_log(result, output_dir, site_name)
@@ -408,12 +409,12 @@ async def process_all_page_items(
 			browser=browser,
 			tools=tools,
 			extend_system_message=GLOBAL_RULES,
-			max_steps=max(200, max_items_per_page or 0) * 8,
+			max_failures=10,
 			# 每个条目大约需要8步：滚动+点击+switch+等待+save_detail+close+返回列表+下一个
 			step_timeout=240,
 		)
 
-		result = await agent.run()
+		result = await agent.run(max_steps=max(200, max_items_per_page or 0) * 8)
 		output_raw = result.final_result()
 
 		# 处理None的情况
@@ -549,11 +550,12 @@ async def find_and_click_next_item(
 			llm=llm,
 			browser=browser,
 			extend_system_message=GLOBAL_RULES,
-			max_steps=3,  # 滚动(1) + 点击(1) + 返回(1)，无翻页余地
+			max_failures=5,
 			step_timeout=240,
 		)
 
-		result = await agent.run()
+		# 这里不限制为 3 步：部分站点需要多次滚动/展开才能找到条目。
+		result = await agent.run(max_steps=200)
 		output_raw = result.final_result()
 
 		# 处理None的情况
@@ -663,11 +665,11 @@ async def goto_next_page(browser, llm, site_name: str, current_page: int) -> boo
 			llm=llm,
 			browser=browser,
 			extend_system_message=GLOBAL_RULES,
-			max_steps=3,
+			max_failures=5,
 			step_timeout=240,
 		)
 
-		await agent.run()
+		await agent.run(max_steps=200)
 
 		# 等待页面加载
 		await asyncio.sleep(2)
@@ -782,11 +784,11 @@ async def analyze_and_filter_page(
 			llm=llm,
 			browser=browser,
 			extend_system_message=GLOBAL_RULES,
-			max_steps=8,
+			max_failures=5,
 			step_timeout=240,
 		)
 
-		result = await agent.run()
+		result = await agent.run(max_steps=400)
 		output_raw = result.final_result()
 
 		# 处理None的情况

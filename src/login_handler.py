@@ -46,12 +46,12 @@ async def smart_login(site_config: SiteConfig, browser, llm) -> bool:
 		llm=llm,
 		browser=browser,
 		extend_system_message=GLOBAL_RULES,
-		max_steps=3,
+		max_failures=5,
 		step_timeout=240,
 	)
 
 	try:
-		result = await detection_agent.run()
+		result = await detection_agent.run(max_steps=100)
 		page_status_raw = result.final_result()
 
 		# 处理None的情况
@@ -148,11 +148,11 @@ async def auto_login(site_config: SiteConfig, browser, llm) -> bool:
 				browser=browser,
 				extend_system_message=GLOBAL_RULES,
 				use_vision=True,  # 启用vision用于验证码识别
-				max_steps=10,
+				max_failures=5,
 				step_timeout=240,
 			)
 
-			result = await login_agent.run()
+			result = await login_agent.run(max_steps=200)
 
 			# 检查是否成功
 			# 简单判断：如果Agent没有报错且完成了任务，认为成功
