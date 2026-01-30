@@ -1029,8 +1029,11 @@ def _sanitize_html_for_extraction(html: str, *, site_name: str, max_chars: int =
 	# Example: <p>..</p><p>..</p> -> <p>....</p>
 	clean = re.sub(r"</strong>\s*<strong>", "", clean, flags=re.IGNORECASE)
 	clean = re.sub(r"</p>\s*<p>", "", clean, flags=re.IGNORECASE)
-	# Remove <br> line breaks to reduce token noise.
-	clean = re.sub(r"<br\s*/?>", "", clean, flags=re.IGNORECASE)
+	# # Remove <br> line breaks to reduce token noise.
+	# clean = re.sub(r"<br\s*/?>", "", clean, flags=re.IGNORECASE)
+	# Remove full-width question marks commonly used as masking/placeholder separators in some tender pages.
+	# Use a whitespace-tolerant pattern so "账 ？ 号" becomes "账号".
+	clean = re.sub(r"\s*？\s*", "", clean)
 
 	# Hard cap to avoid extremely large prompts.
 	if max_chars and len(clean) > max_chars:
@@ -1317,17 +1320,21 @@ def _html_to_clean_content_html(html: str, site_name: str) -> str:
 	if not html:
 		return ""
 	try:
-		from bs4 import BeautifulSoup
+		from bs4 import BeautifulSoup, Comment
 	except Exception as e:  # pragma: no cover
 		logger.warning(f"[{site_name}] bs4 不可用，返回原始 HTML: {e}")
 		return html
 
 	soup = BeautifulSoup(html, "html.parser")
 
+	# Remove comments.
+	for c in soup.find_all(string=lambda x: isinstance(x, Comment)):
+		c.extract()
+
 	# Remove noisy nodes.
 	for el in soup.select(
 		"script,style,noscript,svg,canvas,header,nav,footer,aside,"
-		"form,input,button,select,option,textarea"
+		"form,input,button,select,option,textarea,meta,link,title,head"
 	):
 		el.decompose()
 
@@ -1358,6 +1365,31 @@ def _html_to_clean_content_html(html: str, site_name: str) -> str:
 		a.string = src
 		p.append(a)
 		iframe.replace_with(p)
+
+	# Unwrap token-heavy inline tags; keep their text/content.
+	for tag_name in ("span", "font"):
+		for el in soup.find_all(tag_name):
+			el.unwrap()
+
+	# Strip attributes (font/height/style/etc) to reduce noise. Preserve structural attrs.
+	for el in soup.find_all(True):
+		attrs = dict(el.attrs or {})
+		keep: dict[str, str] = {}
+		if el.name == "a":
+			href = attrs.get("href")
+			if href:
+				keep["href"] = href
+		if el.name in {"td", "th"}:
+			for k in ("rowspan", "colspan"):
+				v = attrs.get(k)
+				if v is not None:
+					keep[k] = str(v)
+		el.attrs = keep
+
+	# Normalize text nodes: collapse non-breaking spaces.
+	for t in soup.find_all(string=True):
+		if isinstance(t, str):
+			t.replace_with(t.replace("\xa0", " "))
 
 	# Return a clean HTML fragment.
 	return str(soup)
