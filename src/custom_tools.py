@@ -15,6 +15,28 @@ from .logger_config import get_logger
 logger = get_logger()
 
 
+_MAX_FILENAME_COMPONENT_BYTES = 240  # conservative across Windows/Linux filesystems
+_MAX_WINDOWS_PATH_CHARS = 240  # conservative to avoid Win32 MAX_PATH issues in some environments
+
+
+def _truncate_to_utf8_bytes(text: str, max_bytes: int) -> str:
+	"""
+	Truncate a string so its UTF-8 encoded length is <= max_bytes.
+	"""
+	if max_bytes <= 0:
+		return ""
+	if len(text.encode("utf-8")) <= max_bytes:
+		return text
+	lo, hi = 0, len(text)
+	while lo < hi:
+		mid = (lo + hi + 1) // 2
+		if len(text[:mid].encode("utf-8")) <= max_bytes:
+			lo = mid
+		else:
+			hi = mid - 1
+	return text[:lo]
+
+
 def sanitize_filename(filename: str, max_length: int = 100) -> str:
 	"""
 	清理文件名中的非法字符
@@ -64,12 +86,32 @@ def get_unique_filename(base_dir: Path, title: str, date: str) -> str:
 	Returns:
 		唯一的文件名（不含扩展名）
 	"""
-	# 清理文件名
+	# Keep the naming format unchanged: "<title>_<date>" (and optionally "_<counter>").
+	# Only truncate the *title part* if needed to avoid filesystem/path length errors.
 	safe_title = sanitize_filename(title)
-	base_filename = f"{safe_title}_{date}"
+	ext = ".json"
+
+	def _fit_base(counter_suffix: str) -> str:
+		# Component length limits (Linux: 255 bytes; Windows: 255 chars). Use conservative byte cap.
+		reserved = f"_{date}{counter_suffix}".encode("utf-8")
+		max_base_bytes = _MAX_FILENAME_COMPONENT_BYTES - len(ext.encode("utf-8"))
+		allow_title_bytes = max_base_bytes - len(reserved)
+		fitted_title = _truncate_to_utf8_bytes(safe_title, allow_title_bytes)
+		base = f"{fitted_title}_{date}{counter_suffix}"
+
+		# Extra guard for Windows full-path length limits in some environments.
+		if os.name == "nt":
+			full_path = base_dir / f"{base}{ext}"
+			if len(str(full_path)) > _MAX_WINDOWS_PATH_CHARS:
+				over = len(str(full_path)) - _MAX_WINDOWS_PATH_CHARS
+				target_chars = max(0, len(fitted_title) - over - 8)
+				base = f"{fitted_title[:target_chars]}_{date}{counter_suffix}"
+		return base
+
+	base_filename = _fit_base("")
 
 	# 检查是否存在
-	json_path = base_dir / f"{base_filename}.json"
+	json_path = base_dir / f"{base_filename}{ext}"
 
 	if not json_path.exists():
 		return base_filename
@@ -77,8 +119,8 @@ def get_unique_filename(base_dir: Path, title: str, date: str) -> str:
 	# 存在冲突，添加序号
 	counter = 2
 	while True:
-		new_filename = f"{base_filename}_{counter}"
-		json_path = base_dir / f"{new_filename}.json"
+		new_filename = _fit_base(f"_{counter}")
+		json_path = base_dir / f"{new_filename}{ext}"
 
 		if not json_path.exists():
 			return new_filename

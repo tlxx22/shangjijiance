@@ -101,7 +101,7 @@ async def process_entire_site(
 	site_name: str,
 	output_dir: Path,
 	max_pages: int = 5,
-	max_items_per_page: int = 10,
+	max_items_per_page: int | None = None,
 	on_item_saved=None,
 	date_start: str | None = None,
 	date_end: str | None = None
@@ -116,7 +116,7 @@ async def process_entire_site(
 		site_name: 网站名称
 		output_dir: 输出目录
 		max_pages: 最大翻页数
-		max_items_per_page: 每页最多处理的条目数
+		max_items_per_page: 每页最多处理的条目数（None 表示不限制）
 
 	Returns:
 		字典 {"items_found": N, "pages_processed": M}
@@ -185,7 +185,7 @@ IMPORTANT:
 
 **⚠️ 重要提示：**
 - 每个条目只点击一次，不要重复处理
-- 每页最多处理 {max_items_per_page} 个条目
+	- 尽可能处理当前页所有符合条件的条目
 - **翻页限制**：最多翻 {max_pages} 页，达到后用 done 返回结果
 - 如果没有"下一页"按钮或已到最后一页，也用 done 返回结果
 
@@ -203,8 +203,11 @@ IMPORTANT:
 """
 
 	try:
-		# 计算 max_steps：每页条目数 * 每条目步数 * 页数 + 筛选步数 + 验证码余量
-		max_steps = max_pages * max_items_per_page * 8 + 50
+		# 计算 max_steps：不再硬性限制每页条目数，但仍需要一个合理的步数预算防止无限运行。
+		# 这里使用一个保守的估计值（每页最多按 200 条估算），实际抓取不会因为该值而主动“限条”。
+		# Even if callers pass a small number (e.g. legacy default 10), do NOT effectively limit crawling.
+		estimated_items_per_page = max(200, max_items_per_page or 0)
+		max_steps = max_pages * estimated_items_per_page * 8 + 50
 
 		agent = Agent(
 			task=task,
@@ -296,7 +299,7 @@ async def process_all_page_items(
 	output_dir: Path,
 	page_num: int,
 	is_first_page: bool = False,
-	max_items_per_page: int = 10
+	max_items_per_page: int | None = None
 ) -> int:
 	"""
 	处理当前页面的所有符合条件的条目（Agent自主完成全部流程）
@@ -309,7 +312,7 @@ async def process_all_page_items(
 		output_dir: 输出目录（如 output/2025-12-23/网站名称）
 		page_num: 当前页码
 		is_first_page: 是否是第一页
-		max_items_per_page: 每页最多处理的条目数
+		max_items_per_page: 每页最多处理的条目数（None 表示不限制）
 
 	Returns:
 		成功保存的条目数量
@@ -379,7 +382,7 @@ async def process_all_page_items(
 **⚠️ 重要提示：**
 - 每个条目【只点击一次】，不要重复点击同一个条目
 - 在详情页记得等待页面加载完成再提取原文
-- 最多处理 {max_items_per_page} 个条目
+	- 尽可能处理当前页所有符合条件的条目
 - 当前页面所有符合条件的条目都处理完后，用 done 返回结果
 
 **关于标签页操作：**
@@ -405,7 +408,8 @@ async def process_all_page_items(
 			browser=browser,
 			tools=tools,
 			extend_system_message=GLOBAL_RULES,
-			max_steps=max_items_per_page * 8,  # 每个条目大约需要8步：滚动+点击+switch+等待+save_detail+close+返回列表+下一个
+			max_steps=max(200, max_items_per_page or 0) * 8,
+			# 每个条目大约需要8步：滚动+点击+switch+等待+save_detail+close+返回列表+下一个
 			step_timeout=240,
 		)
 
