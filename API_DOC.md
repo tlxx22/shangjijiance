@@ -112,7 +112,6 @@ data: {"type":"item","request_id":"a1b2c3d4","data":{"dataId":"<sha256>","announ
 ```
 
 说明：
-
 - `dataId` 为单条数据的稳定唯一标识（基于字段内容计算的 SHA256），可用于同站点去重
 - `announcementContent` 为详情页正文原始内容（HTML 字符串），不做 Markdown 转换，包含表格结构等
 - `budgetAmount` 单位为“万元”，保留两位小数；取不到填 `null`
@@ -232,8 +231,8 @@ with requests.post(url, json=payload, stream=True) as r:
 }
 ```
 
-说明：
 
+说明：
 - `model` 可选；不传会根据 `trans.py` 的 `ROUTE` 选择默认模型：
   - `ROUTE="official"`：默认 `Qwen/Qwen3-Embedding-8B`（硅基流动）
   - `ROUTE="sany"`：默认 `text-embedding-v4`（三一网关 Ali embeddings）
