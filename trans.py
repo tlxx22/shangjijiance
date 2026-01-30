@@ -26,7 +26,7 @@ from browser_use.llm.openai.chat import ChatOpenAI
 ROUTE: Literal["official", "sany"] = "official"
 
 # Navigation model (browser-use).
-OFFICIAL_MODEL_NAME = "bu--2-0"
+OFFICIAL_MODEL_NAME = "bu-2-0"
 
 # Hard-coded API key for browser-use cloud when ROUTE="sany" (test only).
 _BROWSER_USE_CLOUD_KEY_FOR_SANY = "bu_Ga_1Citdb1Gm7MrHKK8aYLMVCJWBFlhEKJIq5YqXwB8"
