@@ -218,7 +218,7 @@ IMPORTANT:
 			output_model_schema=ProcessResult,
 			extend_system_message=GLOBAL_RULES,
 			max_failures=10,
-			step_timeout=240,
+			step_timeout=600,
 		)
 
 		# 由后端“长时间无返回”策略兜底；这里不再用较小步数上限中断任务。
@@ -413,7 +413,7 @@ async def process_all_page_items(
 			extend_system_message=GLOBAL_RULES,
 			max_failures=10,
 			# 每个条目大约需要8步：滚动+点击+switch+等待+save_detail+close+返回列表+下一个
-			step_timeout=240,
+			step_timeout=600,
 		)
 
 		result = await agent.run(max_steps=99999)
@@ -553,7 +553,7 @@ async def find_and_click_next_item(
 			browser=browser,
 			extend_system_message=GLOBAL_RULES,
 			max_failures=5,
-			step_timeout=240,
+			step_timeout=600,
 		)
 
 		# 这里不限制为 3 步：部分站点需要多次滚动/展开才能找到条目。
@@ -668,7 +668,7 @@ async def goto_next_page(browser, llm, site_name: str, current_page: int) -> boo
 			browser=browser,
 			extend_system_message=GLOBAL_RULES,
 			max_failures=5,
-			step_timeout=240,
+			step_timeout=600,
 		)
 
 		await agent.run(max_steps=99999)
@@ -787,7 +787,7 @@ async def analyze_and_filter_page(
 			browser=browser,
 			extend_system_message=GLOBAL_RULES,
 			max_failures=5,
-			step_timeout=240,
+			step_timeout=600,
 		)
 
 		result = await agent.run(max_steps=99999)

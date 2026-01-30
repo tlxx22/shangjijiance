@@ -810,7 +810,7 @@ async def extract_fields_from_page(browser_session, llm, site_name: str, stage: 
 			browser=browser_session,
 			extend_system_message=GLOBAL_RULES,
 			max_failures=5,
-			step_timeout=240,
+			step_timeout=600,
 		)
 
 		result = await extract_agent.run(max_steps=99999)

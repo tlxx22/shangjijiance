@@ -47,7 +47,7 @@ async def smart_login(site_config: SiteConfig, browser, llm) -> bool:
 		browser=browser,
 		extend_system_message=GLOBAL_RULES,
 		max_failures=5,
-		step_timeout=240,
+		step_timeout=600,
 	)
 
 	try:
@@ -149,7 +149,7 @@ async def auto_login(site_config: SiteConfig, browser, llm) -> bool:
 				extend_system_message=GLOBAL_RULES,
 				use_vision=True,  # 启用vision用于验证码识别
 				max_failures=5,
-				step_timeout=240,
+				step_timeout=600,
 			)
 
 			result = await login_agent.run(max_steps=99999)

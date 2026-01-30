@@ -86,7 +86,7 @@ async def get_iframe_url(browser, llm, site_name: str) -> str:
 			browser=browser,
 			extend_system_message=GLOBAL_RULES,
 			max_failures=5,
-			step_timeout=240,
+			step_timeout=600,
 		)
 
 		result = await extract_agent.run(max_steps=99999)
@@ -167,7 +167,7 @@ async def check_page_security(browser, llm, site_name: str) -> bool:
 			browser=browser,
 			extend_system_message=GLOBAL_RULES,
 			max_failures=5,
-			step_timeout=240,
+			step_timeout=600,
 		)
 
 		result = await security_agent.run(max_steps=99999)
@@ -238,7 +238,7 @@ async def enter_list_page(browser, llm, site_name: str) -> bool:
 			browser=browser,
 			extend_system_message=GLOBAL_RULES,
 			max_failures=5,
-			step_timeout=240,
+			step_timeout=600,
 		)
 
 		result = await enter_agent.run(max_steps=99999)
@@ -393,7 +393,7 @@ async def process_site(
 					extend_system_message=GLOBAL_RULES,
 					initial_actions=[{'navigate': {'url': iframe_url}}],
 					max_failures=5,
-					step_timeout=240,
+					step_timeout=600,
 				)
 				await nav_agent.run(max_steps=99999)
 
