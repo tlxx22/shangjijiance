@@ -1551,6 +1551,7 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 	# 因此这里不禁用 file tools（禁用会导致模型在早期规划阶段产生大量无效 action schema），
 	# 而是在提示词里明确禁止使用 file tools 作为业务输出。
 	tools = Tools()
+	seen_detail_keys: set[str] = set()
 
 	@tools.action(
 		'保存当前详情页的公告正文原始内容(HTML)和结构化字段到文件。在切换到详情页标签页后调用此工具。',
@@ -1587,6 +1588,21 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 				logger.warning(f"获取URL失败: {e}")
 				detail_url = "unknown"
 
+			# 2.5 去重：网站列表可能在爬取过程中从第一页插入新公告，导致后续页码内容“整体后移”并出现重复。
+			# 这里以“详情页 URL”为主键去重；取不到 URL 时退化为 title+date。
+			file_date = normalize_date_ymd(date) or str(date).replace("/", "-").replace(".", "-")
+			dedup_key = (detail_url or "").strip()
+			if not dedup_key or dedup_key == "unknown":
+				dedup_key = f"{title.strip()}|{file_date}"
+
+			if dedup_key in seen_detail_keys:
+				logger.info(f"[{site_name}] ↩︎ 重复公告已跳过: {title[:40]}... ({dedup_key[:80]})")
+				return ActionResult(
+					extracted_content="skipped_duplicate",
+					long_term_memory=f"重复公告已跳过: {title[:30]}..."
+				)
+			seen_detail_keys.add(dedup_key)
+
 			# 3. 尝试点击"查看完整信息"按钮（展开脱敏内容）
 			await click_show_full_info(browser_session)
 			# 一些站点详情内容是异步渲染的，点击后需要额外等待
@@ -1618,7 +1634,6 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 				lot_candidates = []
 
 			# 7. 生成唯一文件名（使用列表页日期做文件分组）
-			file_date = normalize_date_ymd(date) or str(date).replace("/", "-").replace(".", "-")
 			filename = get_unique_filename(output_dir, title, file_date)
 
 			# 组装最终返回结构（V2）
