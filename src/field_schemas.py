@@ -365,6 +365,9 @@ class LotProduct(BaseModel):
 	@field_validator("subjects", "productCategory", "models", mode="before")
 	@classmethod
 	def _text_single(cls, v: Any) -> str:
+		if isinstance(v, str):
+			s = v.strip()
+			return "" if (not s or s.lower() in _EMPTY_STRINGS) else s
 		parts = _to_str_list(v)
 		return parts[0] if parts else ""
 
@@ -405,6 +408,9 @@ class LotProducts(RootModel[list[LotProduct]]):
 			lot_name = _join_list(item.get("lotName"))
 
 			subjects = _to_str_list(item.get("subjects"))
+			if not subjects:
+				desc = _join_list(item.get("description"))
+				subjects = [desc] if desc else []
 			product_categories = _to_str_list(item.get("productCategory"))
 			models = _to_str_list(item.get("models"))
 			unit_prices = _normalize_price_list(item.get("unitPrices"))

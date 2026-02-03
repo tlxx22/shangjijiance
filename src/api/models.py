@@ -48,3 +48,23 @@ class EmbeddingResponse(BaseModel):
     """向量化响应"""
     model: str = Field(description="实际使用的模型名")
     embedding: list[float] = Field(description="向量值")
+
+
+class MarkdownRequest(BaseModel):
+    """公告原文转 Markdown 请求"""
+    announcementContent: constr(min_length=1) = Field(description="已清洗的公告原文内容（通常为 HTML 字符串）")
+
+
+class MarkdownResponse(BaseModel):
+    """公告原文转 Markdown 响应"""
+    markdown: str = Field(description="结构化 Markdown 文本")
+
+
+class NormalizeItemRequest(BaseModel):
+    """任意来源 JSON 映射到统一模板的请求"""
+    sourceJson: constr(min_length=1) = Field(description="其它来源的数据 JSON（由后端拼接成字符串传入）")
+
+
+class NormalizeItemResponse(BaseModel):
+    """任意来源 JSON 映射到统一模板的响应"""
+    data: dict = Field(description="统一 item 模板 JSON")

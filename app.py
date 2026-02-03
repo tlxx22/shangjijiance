@@ -23,12 +23,22 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from src.api.models import CrawlRequest, EmbeddingRequest, EmbeddingResponse
+from src.api.models import (
+    CrawlRequest,
+    EmbeddingRequest,
+    EmbeddingResponse,
+    MarkdownRequest,
+    MarkdownResponse,
+    NormalizeItemRequest,
+    NormalizeItemResponse,
+)
 from src.api.prompt_manager import load_prompt_template, render_prompt
 from src.api.crawl_session import CrawlSession, event_generator
 from src.config_manager import SiteConfig
 from src.logger_config import get_logger, init_logger, set_request_id, reset_request_id
 from src.embedding_client import get_text_embedding
+from src.llm_transform import convert_announcement_content_to_markdown, normalize_source_json_to_item
+from src.custom_tools import compute_data_id, _parse_address_parts_from_detail
 
 logger = get_logger()
 
@@ -218,6 +228,87 @@ async def embedding(http_request: Request):
     except Exception as e:
         logger.error(f"/embedding failed: {e}")
         raise HTTPException(502, f"Upstream embedding error: {e}")
+
+
+@app.post("/content_to_md", response_model=MarkdownResponse)
+async def content_to_md(http_request: Request):
+    """
+    将已清洗的 announcementContent 转为结构清晰的 Markdown 文本（由 DeepSeek 生成）。
+    """
+    try:
+        raw = await http_request.body()
+        text_fallback = raw.decode("utf-8", errors="ignore").strip()
+
+        payload: dict
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                payload = {"announcementContent": text_fallback}
+        except Exception:
+            payload = {"announcementContent": text_fallback}
+
+        req = MarkdownRequest.model_validate(payload)
+        md = await convert_announcement_content_to_markdown(req.announcementContent)
+        return {"markdown": md}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+    except Exception as e:
+        logger.error(f"/content_to_md failed: {e}")
+        raise HTTPException(502, f"Upstream markdown error: {e}")
+
+
+@app.post("/normalize_item", response_model=NormalizeItemResponse)
+async def normalize_item(http_request: Request):
+    """
+    将任意来源（第三方 API / Excel 等）的 JSON 字符串映射为统一 item 模板（由 DeepSeek 生成）。
+    """
+    try:
+        raw = await http_request.body()
+        text_fallback = raw.decode("utf-8", errors="ignore").strip()
+
+        payload: dict
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                payload = {"sourceJson": text_fallback}
+        except Exception:
+            payload = {"sourceJson": text_fallback}
+
+        req = NormalizeItemRequest.model_validate(payload)
+        item = await normalize_source_json_to_item(req.sourceJson)
+
+        # 地址字段：与 save_detail 保持一致，统一从 AddressDetail 解析（或兜底为中国）。
+        for prefix in ("buyer", "project", "delivery"):
+            detail_key = f"{prefix}AddressDetail"
+            country_key = f"{prefix}Country"
+            province_key = f"{prefix}Province"
+            city_key = f"{prefix}City"
+            district_key = f"{prefix}District"
+
+            detail = (item.get(detail_key) or "").strip()
+            if not detail:
+                item[country_key] = "中国"
+                item[province_key] = ""
+                item[city_key] = ""
+                item[district_key] = ""
+            else:
+                parts = _parse_address_parts_from_detail(detail)
+                item[country_key] = parts.country or "中国"
+                item[province_key] = parts.province
+                item[city_key] = parts.city
+                item[district_key] = parts.district
+
+        item["dataId"] = compute_data_id(item)
+        return {"data": item}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+    except Exception as e:
+        logger.error(f"/normalize_item failed: {e}")
+        raise HTTPException(502, f"Upstream normalize error: {e}")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,8 @@
 | GET | `/health` | 健康检查 |
 | POST | `/crawl` | 发起爬取任务（SSE 流式响应） |
 | POST | `/embedding` | 文本向量化（返回 embedding 向量） |
+| POST | `/content_to_md` | 公告原文转 Markdown |
+| POST | `/normalize_item` | 任意来源 JSON 映射统一模板 |
 
 ---
 
@@ -274,4 +276,93 @@ curl -v --max-time 15 -X POST 'http://localhost:80/embedding' -H 'Content-Type: 
 curl -X POST http://localhost:8000/embedding \
   -H "Content-Type: text/plain; charset=utf-8" \
   --data-binary "液压挖掘机采购招标公告"
+```
+
+---
+
+## POST /content_to_md
+
+将后端传入的 **已清洗** `announcementContent` 转换为结构清晰的 Markdown 文本（由 DeepSeek 生成）。
+
+### 请求
+
+**Content-Type**: `application/json`
+
+```json
+{
+  "announcementContent": "<div>...</div>"
+}
+```
+
+说明：
+- 也支持 `text/plain`：直接把 body 当作 `announcementContent`
+- 路由：同字段抽取一样由 `trans.py` 的 `ROUTE` 控制（`official`/`sany`）
+
+### 响应（200）
+
+```json
+{
+  "markdown": "# 标题\n\n..."
+}
+```
+
+---
+
+## POST /normalize_item
+
+将任意来源（第三方 API / Excel 导入等）的 JSON 字符串，映射为本项目的 **统一 item 模板**（由 DeepSeek 生成）。
+
+### 请求
+
+**Content-Type**: `application/json`
+
+```json
+{
+  "sourceJson": "{\"foo\": 1, \"bar\": \"...\"}"
+}
+```
+
+说明：
+- `sourceJson` 是其它来源数据的 JSON 字符串（可包含嵌套结构）
+- 路由：同字段抽取一样由 `trans.py` 的 `ROUTE` 控制（`official`/`sany`）
+
+### 响应（200）
+
+```json
+{
+  "data": {
+    "dataId": "....",
+    "announcementUrl": "",
+    "announcementName": "",
+    "announcementContent": "",
+    "projectName": "",
+    "projectId": "",
+    "announcementDate": "",
+    "bidOpenDate": "",
+    "budgetAmount": null,
+    "estimatedAmount": "",
+    "buyerCountry": "中国",
+    "buyerProvince": "",
+    "buyerCity": "",
+    "buyerDistrict": "",
+    "buyerAddressDetail": "",
+    "projectCountry": "中国",
+    "projectProvince": "",
+    "projectCity": "",
+    "projectDistrict": "",
+    "projectAddressDetail": "",
+    "deliveryCountry": "中国",
+    "deliveryProvince": "",
+    "deliveryCity": "",
+    "deliveryDistrict": "",
+    "deliveryAddressDetail": "",
+    "buyerName": "",
+    "buyerContact": "",
+    "buyerPhone": "",
+    "agency": "",
+    "announcementType": "招标",
+    "lotProducts": [],
+    "lotCandidates": []
+  }
+}
 ```
