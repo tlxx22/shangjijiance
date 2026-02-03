@@ -42,6 +42,12 @@ fields:
     stage: flat
     hint: 数字，单位：万元（保留两位小数）。若页面为元/亿需换算到万元
 
+  - key: winnerAmount
+    name: 中标金额
+    type: number
+    stage: flat
+    hint: 数字，单位：万元（保留两位小数）。仅当详情页明确给出“中标/成交/定标/授标金额”等信息时填写；取不到填 null
+
   - key: estimatedAmount
     name: 预估金额
     type: string

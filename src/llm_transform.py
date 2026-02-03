@@ -170,7 +170,7 @@ Important:
   - number: null
   - array: []
 - Dates must be YYYY-MM-DD when possible.
-- Money amounts for budgetAmount must be in 万元 (number). If unknown, use null.
+- Money amounts for budgetAmount and winnerAmount must be in 万元 (number). If unknown, use null.
 - lotProducts and lotCandidates must follow EXACTLY the crawler schema (do NOT invent fields like "description").
 - lotNumber must be 标段一/标段二/...; if not specified but lot object is needed, use 标段一.
 - Do not invent information not present in the input JSON string.

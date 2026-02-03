@@ -480,6 +480,7 @@ from browser_use.tools.service import Tools
 from .config_manager import load_extract_fields, generate_extract_prompt
 from .prompts import GLOBAL_RULES
 from .extract_client import chat_completion
+from .address_normalizer import normalize_item_admin_divisions
 from .field_schemas import (
 	LotProducts,
 	LotCandidates,
@@ -1679,6 +1680,13 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 					result_data[province_key] = parts.province
 					result_data[city_key] = parts.city
 					result_data[district_key] = parts.district
+
+			# 地址字段二次归一化：仅对 country/province/city/district 这 12 个字段做标准化（不包含 AddressDetail）
+			# 若归一化失败会自动重试，达到上限后回退原值；只影响上述字段。
+			try:
+				result_data = await normalize_item_admin_divisions(result_data, max_retries=3)
+			except Exception as norm_err:
+				logger.warning(f"[{site_name}] 地址字段二次归一化失败（已跳过）: {norm_err}")
 
 			# 为单条结果生成稳定唯一标识（用于去重）
 			result_data["dataId"] = compute_data_id(result_data)

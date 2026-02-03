@@ -38,6 +38,7 @@ from src.config_manager import SiteConfig
 from src.logger_config import get_logger, init_logger, set_request_id, reset_request_id
 from src.embedding_client import get_text_embedding
 from src.llm_transform import convert_announcement_content_to_markdown, normalize_source_json_to_item
+from src.address_normalizer import normalize_item_admin_divisions
 from src.custom_tools import compute_data_id, _parse_address_parts_from_detail
 
 logger = get_logger()
@@ -299,6 +300,13 @@ async def normalize_item(http_request: Request):
                 item[province_key] = parts.province
                 item[city_key] = parts.city
                 item[district_key] = parts.district
+
+        # 地址字段二次归一化：仅对 country/province/city/district 这 12 个字段做标准化（不包含 AddressDetail）
+        # 若归一化失败会自动重试，达到上限后回退原值；只影响上述字段。
+        try:
+            item = await normalize_item_admin_divisions(item, max_retries=3)
+        except Exception as norm_err:
+            logger.warning(f"/normalize_item 地址字段二次归一化失败（已跳过）: {norm_err}")
 
         item["dataId"] = compute_data_id(item)
         return {"data": item}
