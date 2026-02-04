@@ -6,8 +6,8 @@ import re
 from typing import Any
 
 from .extract_client import chat_completion
-from .config_manager import load_extract_fields, generate_extract_prompt
-from .custom_tools import normalize_field_value
+from .config_manager import load_extract_fields
+from .custom_tools import extract_fields_from_html, normalize_field_value
 from .field_schemas import LotProducts, LotCandidates, normalize_announcement_type
 
 
@@ -142,66 +142,36 @@ Rules:
 
 async def normalize_source_json_to_item(source_json: str) -> dict[str, Any]:
 	"""
-	Map arbitrary source JSON text into our unified item template using DeepSeek.
-	Routing is controlled by trans.ROUTE via extract_client.chat_completion.
+	Map arbitrary source JSON/text into our unified item template using the SAME 2-stage extraction as /crawl:
+	- stage=flat: flat fields
+	- stage=lots: lotProducts/lotCandidates
+
+	Input is a raw text string (often a JSON blob mixed with other text). We feed it directly to the extractor.
 	"""
 	src = (source_json or "").strip()
-	if not src:
-		return _build_full_item_template()
-
 	template = _build_full_item_template()
-	keys = [k for k in template.keys() if k != "dataId"]  # computed by server
-
-	# Reuse existing extraction prompts so field definitions stay identical to crawler.
-	flat_prompt = generate_extract_prompt(load_extract_fields(stage="flat"), stage="flat")
-	lots_prompt = generate_extract_prompt(load_extract_fields(stage="lots"), stage="lots")
-
-	system_prompt = f"""
-You are a normalization engine.
-You will be given a JSON string from external sources (3rd-party API / Excel import / other crawlers).
-Extract and map fields into our TARGET JSON template and return ONLY valid JSON.
-
-Important:
-- The output must be a single JSON object with EXACTLY these keys:
-  {", ".join(keys)}
-- Do NOT output any extra keys.
-- Fill missing values with correct empty defaults:
-  - string: ""
-  - number: null
-  - array: []
-- Dates must be YYYY-MM-DD when possible.
-- Money amounts for budgetAmount and winnerAmount must be in 万元 (number). If unknown, use null.
-- lotProducts and lotCandidates must follow EXACTLY the crawler schema (do NOT invent fields like "description").
-- lotNumber must be 标段一/标段二/...; if not specified but lot object is needed, use 标段一.
-- Do not invent information not present in the input JSON string.
-
-Field definitions (MUST follow these exactly):
-{flat_prompt}
-
-{lots_prompt}
-""".strip()
-
-	user_prompt = f"SOURCE_JSON_TEXT:\\n{src}"
-	out = await asyncio.to_thread(
-		chat_completion,
-		[
-			{"role": "system", "content": system_prompt},
-			{"role": "user", "content": user_prompt},
-		],
-	)
-	out = _strip_code_fences(out)
-
-	try:
-		parsed = json.loads(out)
-		if not isinstance(parsed, dict):
-			return template
-	except Exception:
+	if not src:
 		return template
 
-	# Merge to template then normalize to the same schema as crawler output.
+	# Best-effort: if src is valid JSON object and contains crawler-level meta keys, reuse them.
+	meta: dict[str, Any] = {}
+	try:
+		obj = json.loads(src)
+		if isinstance(obj, dict):
+			for k in ("announcementUrl", "announcementName", "announcementContent"):
+				if k in obj:
+					meta[k] = obj.get(k)
+	except Exception:
+		pass
+
+	flat_fields = await extract_fields_from_html(src, site_name="normalize_item", stage="flat")
+	lots_fields = await extract_fields_from_html(src, site_name="normalize_item", stage="lots")
+
 	merged = dict(template)
-	for k in keys:
-		if k in parsed:
-			merged[k] = parsed[k]
+	merged.update(meta)
+	merged.update(flat_fields or {})
+
+	merged["lotProducts"] = (lots_fields or {}).get("lotProducts") or []
+	merged["lotCandidates"] = (lots_fields or {}).get("lotCandidates") or []
 
 	return _normalize_item_to_crawler_schema(merged)
