@@ -13,6 +13,8 @@ DEFAULT_SILICONFLOW_EXTRACT_MODEL = "Pro/deepseek-ai/DeepSeek-V3.2"
 
 DEFAULT_SANY_EXTRACT_MODEL = "deepseek-v3.2"
 
+DEFAULT_OPENAI_EXTRACT_MODEL = "gpt-5.2"
+
 
 def _normalize_base_url(url: str) -> str:
 	return (url or "").rstrip("/")
@@ -33,6 +35,7 @@ def chat_completion(messages: list[dict[str, str]], *, model: str | None = None)
 	Routing:
 	- trans.ROUTE == "official": SiliconFlow (OpenAI-compatible /v1/chat/completions)
 	- trans.ROUTE == "sany": SANY gateway (OpenAI-compatible /ai-api/chat/completions)
+	- trans.ROUTE == "openai": OpenAI-compatible endpoint via env OPENAI_BASE_URL/OPENAI_API_KEY
 	"""
 	route = getattr(trans, "ROUTE", "official")
 
@@ -47,6 +50,17 @@ def chat_completion(messages: list[dict[str, str]], *, model: str | None = None)
 		resp: Any = client.chat.completions.create(model=model_name, messages=messages)
 		return (resp.choices[0].message.content or "").strip()
 
+	if route == "openai":
+		api_key = os.getenv("OPENAI_API_KEY")
+		if not api_key:
+			raise RuntimeError("Missing OpenAI API key. Set env var OPENAI_API_KEY.")
+		base_url = _normalize_base_url(os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"))
+		model_name = (model or os.getenv("OPENAI_MODEL") or DEFAULT_OPENAI_EXTRACT_MODEL).strip()
+
+		client = OpenAI(api_key=api_key, base_url=base_url)
+		resp: Any = client.chat.completions.create(model=model_name, messages=messages)
+		return (resp.choices[0].message.content or "").strip()
+
 	# default: official
 	api_key = os.getenv("SILICONFLOW_API_KEY") or os.getenv("SILICONFLOW_KEY")
 	if not api_key:
@@ -57,4 +71,3 @@ def chat_completion(messages: list[dict[str, str]], *, model: str | None = None)
 	client = OpenAI(api_key=api_key, base_url=base_url)
 	resp: Any = client.chat.completions.create(model=model_name, messages=messages)
 	return (resp.choices[0].message.content or "").strip()
-

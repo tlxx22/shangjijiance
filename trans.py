@@ -14,7 +14,7 @@ WARNING: This file contains a plaintext API key. Do not commit it to a shared re
 from __future__ import annotations
 
 import os
-from typing import Literal
+from typing import Literal, cast
 
 from browser_use.llm.base import BaseChatModel
 from browser_use.llm.browser_use import ChatBrowserUse
@@ -23,7 +23,15 @@ from browser_use.llm.openai.chat import ChatOpenAI
 # ======= Switch here =======
 # - "official": browser-use cloud (original)
 # - "sany": browser-use cloud for navigation, SANY gateway for DeepSeek extraction (via trans.ROUTE)
-ROUTE: Literal["official", "sany"] = "official"
+# - "openai": browser-use cloud for navigation, OpenAI-compatible endpoint for extraction (via src/extract_client.py)
+#
+# Runtime override:
+# - Set env var TRANS_ROUTE to one of: official / sany / openai
+_route_env = (os.getenv("TRANS_ROUTE") or "").strip().lower()
+if _route_env in {"official", "sany", "openai"}:
+	ROUTE: Literal["official", "sany", "openai"] = cast(Literal["official", "sany", "openai"], _route_env)
+else:
+	ROUTE: Literal["official", "sany", "openai"] = "official"
 
 # Navigation model (browser-use).
 OFFICIAL_MODEL_NAME = "bu-2-0"
@@ -49,5 +57,12 @@ def build_llm() -> BaseChatModel:
 			base_url=os.getenv("BROWSER_USE_LLM_URL"),
 		)
 
-	raise ValueError(f"Unknown ROUTE={ROUTE!r}. Expected 'official' or 'sany'.")
+	if ROUTE == "openai":
+		# Extraction uses OpenAI (see src/extract_client.py). Navigation stays on browser-use cloud.
+		return ChatBrowserUse(
+			model=OFFICIAL_MODEL_NAME,
+			api_key=os.getenv("BROWSER_USE_API_KEY"),
+			base_url=os.getenv("BROWSER_USE_LLM_URL"),
+		)
 
+	raise ValueError(f"Unknown ROUTE={ROUTE!r}. Expected 'official' or 'sany' or 'openai'.")
