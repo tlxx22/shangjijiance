@@ -38,7 +38,7 @@ from src.config_manager import SiteConfig
 from src.logger_config import get_logger, init_logger, set_request_id, reset_request_id
 from src.embedding_client import get_text_embedding
 from src.llm_transform import convert_announcement_content_to_markdown, normalize_source_json_to_item
-from src.address_normalizer import normalize_item_admin_divisions
+from src.address_normalizer import extract_admin_divisions_from_details
 from src.custom_tools import compute_data_id, _parse_address_parts_from_detail
 
 logger = get_logger()
@@ -280,33 +280,21 @@ async def normalize_item(http_request: Request):
         req = NormalizeItemRequest.model_validate(payload)
         item = await normalize_source_json_to_item(req.sourceJson)
 
-        # 地址字段：与 save_detail 保持一致，统一从 AddressDetail 解析（或兜底为中国）。
-        for prefix in ("buyer", "project", "delivery"):
-            detail_key = f"{prefix}AddressDetail"
-            country_key = f"{prefix}Country"
-            province_key = f"{prefix}Province"
-            city_key = f"{prefix}City"
-            district_key = f"{prefix}District"
-
-            detail = (item.get(detail_key) or "").strip()
-            if not detail:
-                item[country_key] = "中国"
-                item[province_key] = ""
-                item[city_key] = ""
-                item[district_key] = ""
-            else:
-                parts = _parse_address_parts_from_detail(detail)
-                item[country_key] = parts.country or "中国"
-                item[province_key] = parts.province
-                item[city_key] = parts.city
-                item[district_key] = parts.district
-
-        # 地址字段二次归一化：仅对 country/province/city/district 这 12 个字段做标准化（不包含 AddressDetail）
-        # 若归一化失败会自动重试，达到上限后回退原值；只影响上述字段。
+        # 地址字段：不再用正则拆分；改为一次调用 LLM 从三组 AddressDetail 提取 12 个字段。
+        # 规则：
+        # - AddressDetail 为空：country="中国"，省市区为空字符串
+        # - 整体最多重试 3 次；超过上限逐字段回退原值；只影响 12 个字段，不包含 AddressDetail
         try:
-            item = await normalize_item_admin_divisions(item, max_retries=3)
+            addr = await extract_admin_divisions_from_details(
+                buyer_address_detail=item.get("buyerAddressDetail", ""),
+                project_address_detail=item.get("projectAddressDetail", ""),
+                delivery_address_detail=item.get("deliveryAddressDetail", ""),
+                original_item=item,
+                max_retries=3,
+            )
+            item.update(addr)
         except Exception as norm_err:
-            logger.warning(f"/normalize_item 地址字段二次归一化失败（已跳过）: {norm_err}")
+            logger.warning(f"/normalize_item 地址字段 LLM 提取失败（已跳过）: {norm_err}")
 
         item["dataId"] = compute_data_id(item)
         return {"data": item}

@@ -480,7 +480,7 @@ from browser_use.tools.service import Tools
 from .config_manager import load_extract_fields, generate_extract_prompt
 from .prompts import GLOBAL_RULES
 from .extract_client import chat_completion
-from .address_normalizer import normalize_item_admin_divisions
+from .address_normalizer import extract_admin_divisions_from_details
 from .field_schemas import (
 	LotProducts,
 	LotCandidates,
@@ -1658,35 +1658,21 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 			# 公告类别归一化（13 选 1）
 			result_data["announcementType"] = normalize_announcement_type(result_data.get("announcementType"))
 
-			# 地址字段：以“详细地址(全地址)”为唯一来源解析国家/省/市/区
-			for prefix in ("buyer", "project", "delivery"):
-				detail_key = f"{prefix}AddressDetail"
-				country_key = f"{prefix}Country"
-				province_key = f"{prefix}Province"
-				city_key = f"{prefix}City"
-				district_key = f"{prefix}District"
-
-				detail = (result_data.get(detail_key) or "").strip()
-				if not detail:
-					# 规则：当无法从 AddressDetail 识别国家信息时，国家默认“中国”（包含 AddressDetail 为空的情况）
-					result_data[country_key] = "中国"
-					result_data[province_key] = ""
-					result_data[city_key] = ""
-					result_data[district_key] = ""
-				else:
-					parts = _parse_address_parts_from_detail(detail)
-					# 规则：country 从 AddressDetail 识别不到时默认中国（_parse 已兜底）
-					result_data[country_key] = parts.country or "中国"
-					result_data[province_key] = parts.province
-					result_data[city_key] = parts.city
-					result_data[district_key] = parts.district
-
-			# 地址字段二次归一化：仅对 country/province/city/district 这 12 个字段做标准化（不包含 AddressDetail）
-			# 若归一化失败会自动重试，达到上限后回退原值；只影响上述字段。
+			# 地址字段：不再用正则拆分；改为一次调用 LLM 从三组 AddressDetail 提取 12 个字段。
+			# 规则：
+			# - AddressDetail 为空：country="中国"，省市区为空字符串
+			# - 整体最多重试 3 次；超过上限逐字段回退原值；只影响 12 个字段，不包含 AddressDetail
 			try:
-				result_data = await normalize_item_admin_divisions(result_data, max_retries=3)
+				addr = await extract_admin_divisions_from_details(
+					buyer_address_detail=result_data.get("buyerAddressDetail", ""),
+					project_address_detail=result_data.get("projectAddressDetail", ""),
+					delivery_address_detail=result_data.get("deliveryAddressDetail", ""),
+					original_item=result_data,
+					max_retries=3,
+				)
+				result_data.update(addr)
 			except Exception as norm_err:
-				logger.warning(f"[{site_name}] 地址字段二次归一化失败（已跳过）: {norm_err}")
+				logger.warning(f"[{site_name}] 地址字段 LLM 提取失败（已跳过）: {norm_err}")
 
 			# 为单条结果生成稳定唯一标识（用于去重）
 			result_data["dataId"] = compute_data_id(result_data)

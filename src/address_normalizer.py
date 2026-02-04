@@ -288,3 +288,278 @@ async def normalize_item_admin_divisions(item: dict[str, Any], max_retries: int 
 		out[district_key] = normalized.district
 
 	return out
+
+
+def _field_ok_country(country: str) -> bool:
+	s = (country or "").strip()
+	if not s:
+		return True
+	if _is_illegal_text(s) or _is_abbrev_token(s):
+		return False
+	# allow "中国" or foreign country names
+	return True
+
+
+def _field_ok_province(country: str, province: str) -> bool:
+	c = (country or "").strip()
+	p = (province or "").strip()
+	if not p:
+		return True
+	if _is_illegal_text(p) or _is_abbrev_token(p):
+		return False
+
+	# Taiwan rule
+	if "台湾" in p and p != "中国台湾":
+		return False
+	if p == "中国台湾" and c not in {"", "中国"}:
+		return False
+
+	if c and c != "中国":
+		# non-CN: do not enforce suffix rules
+		return True
+
+	if p in {"北京", "天津", "上海", "重庆"}:
+		return False
+	if p in _MUNICIPALITIES or p in _SAR or p in _AUTONOMOUS_REGIONS or p == "中国台湾":
+		return True
+	return p.endswith(_PROVINCE_SUFFIXES)
+
+
+def _field_ok_city(country: str, city: str) -> bool:
+	c = (country or "").strip()
+	ct = (city or "").strip()
+	if not ct:
+		return True
+	if _is_illegal_text(ct) or _is_abbrev_token(ct):
+		return False
+	if c and c != "中国":
+		return True
+	if ct in {"北京", "天津", "上海", "重庆"}:
+		return False
+	return ct.endswith(_CITY_SUFFIXES)
+
+
+def _field_ok_district(country: str, district: str) -> bool:
+	c = (country or "").strip()
+	d = (district or "").strip()
+	if not d:
+		return True
+	if _is_illegal_text(d) or _is_abbrev_token(d):
+		return False
+	if c and c != "中国":
+		return True
+	return d.endswith(_DISTRICT_SUFFIXES)
+
+
+def _apply_field_level_fallback(orig: AddressGroup, cand: AddressGroup) -> AddressGroup:
+	"""
+	逐字段回退：每个字段只要不合规就回退原值；保留合规字段。
+	最后再处理直辖市省市一致性与台湾 country=中国 规则。
+	"""
+	out_country = cand.country if _field_ok_country(cand.country) else orig.country
+	out_province = cand.province if _field_ok_province(out_country, cand.province) else orig.province
+	out_city = cand.city if _field_ok_city(out_country, cand.city) else orig.city
+	out_district = cand.district if _field_ok_district(out_country, cand.district) else orig.district
+
+	# Municipality: province/city should match when city is present.
+	if out_province in _MUNICIPALITIES:
+		if out_city and out_city != out_province:
+			# Prefer reverting to orig city; if orig empty, force match to province.
+			out_city = orig.city if orig.city else out_province
+
+	# Taiwan: ensure country is China when province is 中国台湾.
+	if out_province == "中国台湾" and out_country not in {"", "中国"}:
+		out_country = "中国"
+
+	return AddressGroup(country=out_country, province=out_province, city=out_city, district=out_district)
+
+
+async def extract_admin_divisions_from_details(
+	*,
+	buyer_address_detail: str,
+	project_address_detail: str,
+	delivery_address_detail: str,
+	original_item: dict[str, Any] | None = None,
+	max_retries: int = 3,
+) -> dict[str, str]:
+	"""
+	一次调用 LLM，从三组 AddressDetail 中提取生成 12 个字段：
+	  buyer/project/delivery 的 Country/Province/City/District。
+
+	整体重试：任意一组校验失败则重试（最多 max_retries）。
+	超过上限：逐字段回退到 original_item 对应字段（或默认值）。
+
+	默认规则：当该组 AddressDetail 为空时，country="中国"，省市区=""。
+	"""
+	orig_item = original_item or {}
+
+	def _orig_group(prefix: str) -> AddressGroup:
+		return AddressGroup(
+			country=str(orig_item.get(f"{prefix}Country", "") or "").strip(),
+			province=str(orig_item.get(f"{prefix}Province", "") or "").strip(),
+			city=str(orig_item.get(f"{prefix}City", "") or "").strip(),
+			district=str(orig_item.get(f"{prefix}District", "") or "").strip(),
+		)
+
+	orig_buyer = _orig_group("buyer")
+	orig_project = _orig_group("project")
+	orig_delivery = _orig_group("delivery")
+
+	# If all details are empty, apply defaults without LLM.
+	buyer_detail = (buyer_address_detail or "").strip()
+	project_detail = (project_address_detail or "").strip()
+	delivery_detail = (delivery_address_detail or "").strip()
+	if not (buyer_detail or project_detail or delivery_detail):
+		return {
+			"buyerCountry": "中国",
+			"buyerProvince": "",
+			"buyerCity": "",
+			"buyerDistrict": "",
+			"projectCountry": "中国",
+			"projectProvince": "",
+			"projectCity": "",
+			"projectDistrict": "",
+			"deliveryCountry": "中国",
+			"deliveryProvince": "",
+			"deliveryCity": "",
+			"deliveryDistrict": "",
+		}
+
+	expected_keys = [
+		"buyerCountry",
+		"buyerProvince",
+		"buyerCity",
+		"buyerDistrict",
+		"projectCountry",
+		"projectProvince",
+		"projectCity",
+		"projectDistrict",
+		"deliveryCountry",
+		"deliveryProvince",
+		"deliveryCity",
+		"deliveryDistrict",
+	]
+
+	system_prompt = """
+You are an address extraction engine.
+You will be given three detailed address strings (buyer/project/delivery).
+Extract and output ONLY a single JSON object with EXACTLY the following keys:
+buyerCountry,buyerProvince,buyerCity,buyerDistrict,
+projectCountry,projectProvince,projectCity,projectDistrict,
+deliveryCountry,deliveryProvince,deliveryCity,deliveryDistrict
+
+Rules:
+- For each group, ONLY use that group's AddressDetail as the source; do NOT use other group details.
+- If a group's AddressDetail is empty, output country=\"中国\" and province/city/district as empty strings.
+- Do NOT use abbreviations (e.g., 京/沪/浙/皖/赣/内蒙/广西/宁夏/新疆/西藏...).
+- Names must be full-form:
+  - Provinces: “xx省”; Municipalities: “北京市/天津市/上海市/重庆市”
+  - Autonomous regions must be full names like “内蒙古自治区/广西壮族自治区/宁夏回族自治区/新疆维吾尔自治区/西藏自治区”
+  - SAR: “香港特别行政区/澳门特别行政区”
+  - Taiwan MUST be “中国台湾” (province), and country must be “中国”
+  - Cities end with 市/州/盟/地区 when applicable
+  - Districts end with 区/县/市/旗 when present
+- If you cannot confidently extract a non-empty field, output \"\" (do NOT guess).
+""".strip()
+
+	payload = {
+		"buyerAddressDetail": buyer_detail,
+		"projectAddressDetail": project_detail,
+		"deliveryAddressDetail": delivery_detail,
+	}
+	user_prompt = json.dumps(payload, ensure_ascii=False)
+
+	best_cand: dict[str, str] | None = None
+	for _ in range(max_retries):
+		out = await asyncio.to_thread(
+			chat_completion,
+			[
+				{"role": "system", "content": system_prompt},
+				{"role": "user", "content": user_prompt},
+			],
+		)
+		out = _strip_code_fences(out)
+		try:
+			parsed = json.loads(out)
+		except Exception:
+			continue
+		if not isinstance(parsed, dict):
+			continue
+
+		cand: dict[str, str] = {}
+		for k in expected_keys:
+			v = parsed.get(k, "")
+			cand[k] = "" if v is None else str(v).strip()
+
+		# Apply per-group defaults when detail empty.
+		if not buyer_detail:
+			cand.update({"buyerCountry": "中国", "buyerProvince": "", "buyerCity": "", "buyerDistrict": ""})
+		if not project_detail:
+			cand.update({"projectCountry": "中国", "projectProvince": "", "projectCity": "", "projectDistrict": ""})
+		if not delivery_detail:
+			cand.update({"deliveryCountry": "中国", "deliveryProvince": "", "deliveryCity": "", "deliveryDistrict": ""})
+
+		buyer_group = AddressGroup(
+			country=cand["buyerCountry"],
+			province=cand["buyerProvince"],
+			city=cand["buyerCity"],
+			district=cand["buyerDistrict"],
+		)
+		project_group = AddressGroup(
+			country=cand["projectCountry"],
+			province=cand["projectProvince"],
+			city=cand["projectCity"],
+			district=cand["projectDistrict"],
+		)
+		delivery_group = AddressGroup(
+			country=cand["deliveryCountry"],
+			province=cand["deliveryProvince"],
+			city=cand["deliveryCity"],
+			district=cand["deliveryDistrict"],
+		)
+
+		ok_buyer, _ = _validate_group(buyer_group)
+		ok_project, _ = _validate_group(project_group)
+		ok_delivery, _ = _validate_group(delivery_group)
+
+		best_cand = cand
+		if ok_buyer and ok_project and ok_delivery:
+			return cand
+
+	# Exceeded retries: field-level fallback from best candidate to original.
+	best = best_cand or {k: "" for k in expected_keys}
+	fb_buyer = _apply_field_level_fallback(
+		orig_buyer,
+		AddressGroup(best.get("buyerCountry", ""), best.get("buyerProvince", ""), best.get("buyerCity", ""), best.get("buyerDistrict", "")),
+	)
+	fb_project = _apply_field_level_fallback(
+		orig_project,
+		AddressGroup(best.get("projectCountry", ""), best.get("projectProvince", ""), best.get("projectCity", ""), best.get("projectDistrict", "")),
+	)
+	fb_delivery = _apply_field_level_fallback(
+		orig_delivery,
+		AddressGroup(best.get("deliveryCountry", ""), best.get("deliveryProvince", ""), best.get("deliveryCity", ""), best.get("deliveryDistrict", "")),
+	)
+
+	# Apply defaults when detail empty.
+	if not buyer_detail:
+		fb_buyer = AddressGroup(country="中国", province="", city="", district="")
+	if not project_detail:
+		fb_project = AddressGroup(country="中国", province="", city="", district="")
+	if not delivery_detail:
+		fb_delivery = AddressGroup(country="中国", province="", city="", district="")
+
+	return {
+		"buyerCountry": fb_buyer.country,
+		"buyerProvince": fb_buyer.province,
+		"buyerCity": fb_buyer.city,
+		"buyerDistrict": fb_buyer.district,
+		"projectCountry": fb_project.country,
+		"projectProvince": fb_project.province,
+		"projectCity": fb_project.city,
+		"projectDistrict": fb_project.district,
+		"deliveryCountry": fb_delivery.country,
+		"deliveryProvince": fb_delivery.province,
+		"deliveryCity": fb_delivery.city,
+		"deliveryDistrict": fb_delivery.district,
+	}

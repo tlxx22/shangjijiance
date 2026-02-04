@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from .extract_client import chat_completion
-from .config_manager import load_extract_fields
+from .config_manager import load_extract_fields, generate_extract_prompt
 from .custom_tools import extract_fields_from_html, normalize_field_value
 from .field_schemas import LotProducts, LotCandidates, normalize_announcement_type
 
@@ -106,82 +106,69 @@ def _normalize_item_to_crawler_schema(raw_item: dict[str, Any]) -> dict[str, Any
 	return item
 
 
-async def _extract_normalize_item_meta_via_llm(src_text: str) -> dict[str, str]:
+async def _extract_normalize_item_meta_flat(src_text: str) -> dict[str, Any]:
 	"""
-	Extract crawler-level meta fields from an unstructured source string using DeepSeek.
+	/normalize_item 专用：一次抽取 meta+flat（使用独立 YAML 配置）。
 
-	NOTE: We do NOT attempt to parse/understand the JSON structure locally here. The input is treated
-	as plain text (may include JSON fragments, key-value dumps, etc).
+	字段集合：normalize_item_meta_flat_fields.yaml
+	- 在 extract_fields.yaml(flat) 的基础上新增 announcementUrl/announcementName/announcementContent
+	- 其余字段定义保持一致（类型/空值规则/枚举等）
 	"""
 	text = (src_text or "").strip()
+
+	fields_path = "normalize_item_meta_flat_fields.yaml"
+	fields = load_extract_fields(fields_path=fields_path, stage="flat")
+	extract_prompt = generate_extract_prompt(fields, stage="flat")
+	empty_result = {f.key: _TYPE_DEFAULTS.get(f.type, "") for f in fields}
+
 	if not text:
-		return {
-			"announcementUrl": "",
-			"announcementName": "",
-			"announcementContent": "",
-			"buyerAddressDetail": "",
-			"projectAddressDetail": "",
-			"deliveryAddressDetail": "",
-		}
+		return empty_result
 
-	system_prompt = """
+	system_prompt = f"""
 You are an information extraction engine.
-You will be given an unstructured text blob coming from 3rd-party bid sources (often a JSON string, but not guaranteed).
-Extract the following fields and return ONLY valid JSON (no markdown, no code fences, no extra text).
+You will be given an unstructured text blob from external bid sources (may be JSON, may be key-value text, may be mixed).
+Extract the requested fields according to the schema below and return ONLY valid JSON.
+No markdown, no code fences, no extra text.
 
-Fields (all strings):
-{
-  "announcementUrl": "",
-  "announcementName": "",
-  "announcementContent": "",
-  "buyerAddressDetail": "",
-  "projectAddressDetail": "",
-  "deliveryAddressDetail": ""
-}
+{extract_prompt}
 
 Rules:
-- Do NOT guess. If a field cannot be found confidently, output "".
-- If there are multiple URLs, prefer the one that looks like the original notice/detail page (not an index page).
-- announcementName should be the notice title if present.
-- announcementContent should be the notice body/detail text if present; do NOT dump the entire input text.
-- For *AddressDetail: if there is no full address but there are province/city/district tokens, you may assemble a minimal address text by concatenating them (province+city+district).
-- Address names must be full-form:
-  - Provinces use “xx省”; Municipalities use “北京市/天津市/上海市/重庆市”
-  - Autonomous regions use full names like “内蒙古自治区...”
-  - Taiwan MUST be “中国台湾”
-  - Cities end with 市/州/盟/地区 when applicable
-  - Districts end with 区/县/市/旗 when applicable (if present in text)
+- Treat the input as plain text; do not require it to be valid JSON.
+- Fill missing fields with the correct empty value by type (string=\"\", number=null, array=[], boolean=false).
+- Money amounts are in 单位“万元”.
+- Dates are YYYY-MM-DD.
 """.strip()
 
-	user_prompt = f"SOURCE_TEXT:\\n{text}"
-	out = await asyncio.to_thread(
-		chat_completion,
-		[
-			{"role": "system", "content": system_prompt},
-			{"role": "user", "content": user_prompt},
-		],
-	)
-	out = _strip_code_fences(out)
+	# Hard cap to avoid extremely large prompts.
+	max_chars = 200_000
+	if len(text) > max_chars:
+		text = text[:max_chars]
 
-	default = {
-		"announcementUrl": "",
-		"announcementName": "",
-		"announcementContent": "",
-		"buyerAddressDetail": "",
-		"projectAddressDetail": "",
-		"deliveryAddressDetail": "",
-	}
+	user_prompt = f"SOURCE_TEXT:\\n{text}"
+	try:
+		output = await asyncio.to_thread(
+			chat_completion,
+			[
+				{"role": "system", "content": system_prompt},
+				{"role": "user", "content": user_prompt},
+			],
+		)
+	except Exception:
+		return empty_result
+
+	out = _strip_code_fences(output)
 	try:
 		parsed = json.loads(out)
 		if not isinstance(parsed, dict):
-			return default
+			return empty_result
 	except Exception:
-		return default
+		return empty_result
 
-	normalized: dict[str, str] = dict(default)
-	for k in default.keys():
-		v = parsed.get(k, "")
-		normalized[k] = "" if v is None else str(v).strip()
+	# Normalize by field types using existing normalize_field_value.
+	normalized: dict[str, Any] = {}
+	for f in fields:
+		raw_value = parsed.get(f.key, _TYPE_DEFAULTS.get(f.type, ""))
+		normalized[f.key] = normalize_field_value(f.key, raw_value, f.type)
 	return normalized
 
 
@@ -232,11 +219,7 @@ async def normalize_source_json_to_item(source_json: str) -> dict[str, Any]:
 	if not src:
 		return template
 
-	# Meta fields are not part of extract_fields.yaml and cannot be obtained from the crawler's 2-stage extractors.
-	# For /normalize_item we extract them from the raw text blob using DeepSeek.
-	meta = await _extract_normalize_item_meta_via_llm(src)
-
-	flat_fields = await extract_fields_from_html(src, site_name="normalize_item", stage="flat")
+	flat_fields = await _extract_normalize_item_meta_flat(src)
 	lots_fields = await extract_fields_from_html(src, site_name="normalize_item", stage="lots")
 
 	merged = dict(template)
@@ -244,10 +227,5 @@ async def normalize_source_json_to_item(source_json: str) -> dict[str, Any]:
 
 	merged["lotProducts"] = (lots_fields or {}).get("lotProducts") or []
 	merged["lotCandidates"] = (lots_fields or {}).get("lotCandidates") or []
-
-	# Apply meta as "fill missing" so stage=flat extraction wins when it already provides values.
-	for k, v in (meta or {}).items():
-		if k in merged and merged.get(k) in ("", None, []):
-			merged[k] = v
 
 	return _normalize_item_to_crawler_schema(merged)
