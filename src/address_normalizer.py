@@ -159,7 +159,12 @@ def _needs_llm_normalize(group: AddressGroup) -> bool:
 	if ok:
 		return False
 	# 空值且无法判断时，不必 LLM；这里只在已有值但不合规时触发。
-	return any((group.country or "").strip(), (group.province or "").strip(), (group.city or "").strip(), (group.district or "").strip())
+	return bool(
+		(group.country or "").strip()
+		or (group.province or "").strip()
+		or (group.city or "").strip()
+		or (group.district or "").strip()
+	)
 
 
 def _strip_code_fences(text: str) -> str:
@@ -283,4 +288,3 @@ async def normalize_item_admin_divisions(item: dict[str, Any], max_retries: int 
 		out[district_key] = normalized.district
 
 	return out
-

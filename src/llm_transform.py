@@ -106,6 +106,85 @@ def _normalize_item_to_crawler_schema(raw_item: dict[str, Any]) -> dict[str, Any
 	return item
 
 
+async def _extract_normalize_item_meta_via_llm(src_text: str) -> dict[str, str]:
+	"""
+	Extract crawler-level meta fields from an unstructured source string using DeepSeek.
+
+	NOTE: We do NOT attempt to parse/understand the JSON structure locally here. The input is treated
+	as plain text (may include JSON fragments, key-value dumps, etc).
+	"""
+	text = (src_text or "").strip()
+	if not text:
+		return {
+			"announcementUrl": "",
+			"announcementName": "",
+			"announcementContent": "",
+			"buyerAddressDetail": "",
+			"projectAddressDetail": "",
+			"deliveryAddressDetail": "",
+		}
+
+	system_prompt = """
+You are an information extraction engine.
+You will be given an unstructured text blob coming from 3rd-party bid sources (often a JSON string, but not guaranteed).
+Extract the following fields and return ONLY valid JSON (no markdown, no code fences, no extra text).
+
+Fields (all strings):
+{
+  "announcementUrl": "",
+  "announcementName": "",
+  "announcementContent": "",
+  "buyerAddressDetail": "",
+  "projectAddressDetail": "",
+  "deliveryAddressDetail": ""
+}
+
+Rules:
+- Do NOT guess. If a field cannot be found confidently, output "".
+- If there are multiple URLs, prefer the one that looks like the original notice/detail page (not an index page).
+- announcementName should be the notice title if present.
+- announcementContent should be the notice body/detail text if present; do NOT dump the entire input text.
+- For *AddressDetail: if there is no full address but there are province/city/district tokens, you may assemble a minimal address text by concatenating them (province+city+district).
+- Address names must be full-form:
+  - Provinces use “xx省”; Municipalities use “北京市/天津市/上海市/重庆市”
+  - Autonomous regions use full names like “内蒙古自治区...”
+  - Taiwan MUST be “中国台湾”
+  - Cities end with 市/州/盟/地区 when applicable
+  - Districts end with 区/县/市/旗 when applicable (if present in text)
+""".strip()
+
+	user_prompt = f"SOURCE_TEXT:\\n{text}"
+	out = await asyncio.to_thread(
+		chat_completion,
+		[
+			{"role": "system", "content": system_prompt},
+			{"role": "user", "content": user_prompt},
+		],
+	)
+	out = _strip_code_fences(out)
+
+	default = {
+		"announcementUrl": "",
+		"announcementName": "",
+		"announcementContent": "",
+		"buyerAddressDetail": "",
+		"projectAddressDetail": "",
+		"deliveryAddressDetail": "",
+	}
+	try:
+		parsed = json.loads(out)
+		if not isinstance(parsed, dict):
+			return default
+	except Exception:
+		return default
+
+	normalized: dict[str, str] = dict(default)
+	for k in default.keys():
+		v = parsed.get(k, "")
+		normalized[k] = "" if v is None else str(v).strip()
+	return normalized
+
+
 async def convert_announcement_content_to_markdown(announcement_content: str) -> str:
 	"""
 	Convert cleaned announcementContent (typically HTML) to a structured Markdown text using DeepSeek.
@@ -153,25 +232,22 @@ async def normalize_source_json_to_item(source_json: str) -> dict[str, Any]:
 	if not src:
 		return template
 
-	# Best-effort: if src is valid JSON object and contains crawler-level meta keys, reuse them.
-	meta: dict[str, Any] = {}
-	try:
-		obj = json.loads(src)
-		if isinstance(obj, dict):
-			for k in ("announcementUrl", "announcementName", "announcementContent"):
-				if k in obj:
-					meta[k] = obj.get(k)
-	except Exception:
-		pass
+	# Meta fields are not part of extract_fields.yaml and cannot be obtained from the crawler's 2-stage extractors.
+	# For /normalize_item we extract them from the raw text blob using DeepSeek.
+	meta = await _extract_normalize_item_meta_via_llm(src)
 
 	flat_fields = await extract_fields_from_html(src, site_name="normalize_item", stage="flat")
 	lots_fields = await extract_fields_from_html(src, site_name="normalize_item", stage="lots")
 
 	merged = dict(template)
-	merged.update(meta)
 	merged.update(flat_fields or {})
 
 	merged["lotProducts"] = (lots_fields or {}).get("lotProducts") or []
 	merged["lotCandidates"] = (lots_fields or {}).get("lotCandidates") or []
+
+	# Apply meta as "fill missing" so stage=flat extraction wins when it already provides values.
+	for k, v in (meta or {}).items():
+		if k in merged and merged.get(k) in ("", None, []):
+			merged[k] = v
 
 	return _normalize_item_to_crawler_schema(merged)
