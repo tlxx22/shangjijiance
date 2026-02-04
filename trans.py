@@ -31,7 +31,7 @@ _route_env = (os.getenv("TRANS_ROUTE") or "").strip().lower()
 if _route_env in {"official", "sany", "openai"}:
 	ROUTE: Literal["official", "sany", "openai"] = cast(Literal["official", "sany", "openai"], _route_env)
 else:
-	ROUTE: Literal["official", "sany", "openai"] = "official"
+	ROUTE: Literal["official", "sany", "openai"] = "openai"
 
 # Navigation model (browser-use).
 OFFICIAL_MODEL_NAME = "bu-2-0"
