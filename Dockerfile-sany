@@ -16,9 +16,9 @@ RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
     uv sync && \
     # 修复目录名问题（chrome-linux64 -> chrome-linux）
     sh -c 'for d in /root/.cache/ms-playwright/chromium-*/; do ln -sf "${d}chrome-linux64" "${d}chrome-linux" 2>/dev/null; done'
-# 使用 browser-use 包原生模型列表，不再在构建阶段 patch
-# sed -i "s/valid_models = \['bu-latest', 'bu-1-0'\]/valid_models = ['bu-latest', 'bu-1-0', 'bu-2-0', 'bu-30b-a3b-preview']/g" \
-#   .venv/lib/python3.11/site-packages/browser_use/llm/browser_use/chat.py
+    # 使用 browser-use 包原生模型列表，不再在构建阶段 patch
+    # sed -i "s/valid_models = \['bu-latest', 'bu-1-0'\]/valid_models = ['bu-latest', 'bu-1-0', 'bu-2-0', 'bu-30b-a3b-preview']/g" \
+    #   .venv/lib/python3.11/site-packages/browser_use/llm/browser_use/chat.py
 
 # 启动命令
 CMD [".venv/bin/gunicorn", "-c", "gunicorn.conf.py", "app:app"]

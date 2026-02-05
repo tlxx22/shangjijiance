@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import contextlib
 import os
 from pathlib import Path
 from datetime import datetime
@@ -16,6 +17,7 @@ from .login_handler import smart_login
 from .list_processor import process_entire_site
 from .prompts import GLOBAL_RULES
 from .logger_config import get_logger
+from .browser_use_budget import BudgetExceededError, get_budget
 
 logger = get_logger()
 
@@ -109,6 +111,8 @@ async def get_iframe_url(browser, llm, site_name: str) -> str:
 		logger.warning(f"[{site_name}] 未找到有效的iframe URL")
 		return ""
 
+	except BudgetExceededError:
+		raise
 	except Exception as e:
 		logger.error(f"[{site_name}] 获取iframe URL失败: {e}")
 		return ""
@@ -187,6 +191,8 @@ async def check_page_security(browser, llm, site_name: str) -> bool:
 		logger.info(f"[{site_name}] 页面安全检查无明确结果，默认继续")
 		return True
 
+	except BudgetExceededError:
+		raise
 	except Exception as e:
 		logger.error(f"[{site_name}] 页面安全检查失败: {e}")
 		# 出错时保守处理，继续执行
@@ -254,6 +260,8 @@ async def enter_list_page(browser, llm, site_name: str) -> bool:
 
 		return True
 
+	except BudgetExceededError:
+		raise
 	except Exception as e:
 		logger.error(f"[{site_name}] 进入列表页失败: {e}")
 		return False  # 出错时返回 False
@@ -306,7 +314,7 @@ async def process_site(
 	output_dir.mkdir(parents=True, exist_ok=True)
 
 	# 初始化LLM
-	llm = build_llm()
+	llm = get_budget().wrap_llm(build_llm())
 
 	# 标记浏览器是否由本函数创建（用于决定是否关闭）
 	browser_created_here = browser is None
@@ -505,6 +513,20 @@ async def process_site(
 				"items_found": total_items,
 				"pages_processed": pages_processed,
 				"error": None
+			}
+
+		except BudgetExceededError as e:
+			# Budget exceeded: stop immediately, do NOT retry.
+			logger.error(f"[{site_name}] 日预算已达上限，停止爬取: {e}")
+			if browser and browser_created_here:
+				with contextlib.suppress(Exception):
+					await browser.kill()
+				browser = None
+			return {
+				"status": "budget_exceeded",
+				"items_found": 0,
+				"pages_processed": 0,
+				"error": str(e),
 			}
 
 		except Exception as e:

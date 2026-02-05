@@ -40,6 +40,7 @@ from src.embedding_client import get_text_embedding
 from src.llm_transform import convert_announcement_content_to_markdown, normalize_source_json_to_item
 from src.address_normalizer import extract_admin_divisions_from_details
 from src.custom_tools import compute_data_id, _parse_address_parts_from_detail
+from src.browser_use_budget import get_budget
 
 logger = get_logger()
 
@@ -122,7 +123,12 @@ async def crawl(request: CrawlRequest, http_request: Request):
         template = load_prompt_template(request.category)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    
+
+    # Daily budget guard (cross-worker): stop starting new crawl tasks once threshold reached.
+    if get_budget().is_stopped():
+        st = get_budget().status()
+        raise HTTPException(429, f"Daily browser-use budget exceeded: spent=${st.spent_usd:.4f}, limit=${st.limit_usd:.2f}")
+     
     # 2. 非阻塞拿锁
     if crawl_lock.locked():
         raise HTTPException(429, "Worker busy")

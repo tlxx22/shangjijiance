@@ -13,6 +13,7 @@ from browser_use import Agent
 from .logger_config import get_logger
 from .custom_tools import create_save_detail_tools
 from .prompts import GLOBAL_RULES
+from .browser_use_budget import BudgetExceededError
 
 logger = get_logger()
 
@@ -289,6 +290,8 @@ IMPORTANT:
 			logger.info(f"[{site_name}] 没有匹配条目")
 		return {"items_found": actual_saved, "pages_processed": 1, "risk_control": False}
 
+	except BudgetExceededError:
+		raise
 	except Exception as e:
 		logger.error(f"[{site_name}] 处理失败: {e}")
 		# 即使出错也统计已保存的文件

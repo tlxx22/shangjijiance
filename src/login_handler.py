@@ -7,6 +7,7 @@ from browser_use import Agent, BrowserSession
 from .config_manager import SiteConfig
 from .logger_config import get_logger
 from .prompts import GLOBAL_RULES
+from .browser_use_budget import BudgetExceededError
 
 logger = get_logger()
 
@@ -163,6 +164,8 @@ async def auto_login(site_config: SiteConfig, browser, llm) -> bool:
 				logger.warning(f"[{site_name}] 登录可能失败，尝试继续...")
 				return True  # 宽松策略：即使不确定也继续
 
+		except BudgetExceededError:
+			raise
 		except Exception as e:
 			logger.error(f"[{site_name}] 登录失败 (第{attempt}次): {e}")
 
