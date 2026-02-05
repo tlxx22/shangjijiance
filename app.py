@@ -127,6 +127,7 @@ async def crawl(request: CrawlRequest, http_request: Request):
     # Daily budget guard (cross-worker): stop starting new crawl tasks once threshold reached.
     if get_budget().is_stopped():
         st = get_budget().status()
+        get_budget().maybe_send_alert(st)
         raise HTTPException(429, f"Daily browser-use budget exceeded: spent=${st.spent_usd:.4f}, limit=${st.limit_usd:.2f}")
      
     # 2. 非阻塞拿锁

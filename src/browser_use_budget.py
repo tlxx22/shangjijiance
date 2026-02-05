@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sqlite3
@@ -15,6 +16,7 @@ from browser_use.llm.base import BaseChatModel
 from browser_use.tokens.service import TokenCost
 
 from .logger_config import get_logger
+from .feishu_webhook import load_feishu_budget_alert_config, send_feishu_text
 
 logger = get_logger()
 
@@ -90,7 +92,43 @@ class DailyBudgetStore:
 			)
 			""".strip()
 		)
+		conn.execute(
+			"""
+			CREATE TABLE IF NOT EXISTS browser_use_budget_alert (
+				day TEXT PRIMARY KEY,
+				sent_at TEXT NOT NULL,
+				spent_usd REAL,
+				limit_usd REAL,
+				message TEXT
+			)
+			""".strip()
+		)
 		self._schema_ready = True
+
+	def mark_alert_sent(
+		self,
+		*,
+		day: str,
+		spent_usd: float,
+		limit_usd: float,
+		message: str,
+	) -> bool:
+		"""
+		Mark alert as sent for the day (cross-process idempotent).
+
+		Returns True only for the first caller that successfully inserts the row.
+		"""
+		self._ensure_schema()
+		conn = self._connect()
+		now = datetime.now().isoformat(timespec="seconds")
+		cur = conn.execute(
+			"""
+			INSERT OR IGNORE INTO browser_use_budget_alert(day, sent_at, spent_usd, limit_usd, message)
+			VALUES (?, ?, ?, ?, ?)
+			""".strip(),
+			(day, now, float(spent_usd), float(limit_usd), message),
+		)
+		return bool(getattr(cur, "rowcount", 0) == 1)
 
 	def get_status(self, *, day: str, limit_usd: float) -> BudgetStatus:
 		self._ensure_schema()
@@ -223,6 +261,43 @@ class BrowserUseBudget:
 		day = _today_key()
 		return self.store.add_cost(day=day, delta_usd=float(delta_usd), limit_usd=self.limit_usd)
 
+	def maybe_send_alert(self, st: BudgetStatus) -> None:
+		"""
+		Send a Feishu alert (optional) when budget is reached/exceeded.
+
+		This is non-blocking and idempotent across workers (via SQLite).
+		"""
+		if not st.stopped:
+			return
+
+		cfg = load_feishu_budget_alert_config()
+		if cfg is None:
+			return
+
+		text = (
+			f"browser-use 日预算已达上限\n"
+			f"- 日期: {st.day}\n"
+			f"- 已花费: ${st.spent_usd:.4f}\n"
+			f"- 阈值: ${st.limit_usd:.2f}\n"
+			f"- 行为: 已自动停止新 /crawl 任务"
+		)
+		if not self.store.mark_alert_sent(day=st.day, spent_usd=st.spent_usd, limit_usd=st.limit_usd, message=text):
+			return
+
+		async def _send():
+			try:
+				resp = await asyncio.to_thread(send_feishu_text, cfg=cfg, text=text)
+				if isinstance(resp, dict):
+					code = resp.get("code")
+					if code not in (None, 0):
+						logger.error(f"[FeishuWebhook] non-zero response: {resp}")
+				logger.info("[FeishuWebhook] budget alert sent")
+			except Exception as e:
+				logger.error(f"[FeishuWebhook] budget alert send failed: {e}")
+
+		with contextlib.suppress(Exception):
+			asyncio.create_task(_send())
+
 	def wrap_llm(self, llm: BaseChatModel) -> BaseChatModel:
 		"""
 		Wrap llm.ainvoke() to:
@@ -240,6 +315,7 @@ class BrowserUseBudget:
 			# Stop fast before making a paid call (except in-flight calls in other workers).
 			if budget.is_stopped():
 				st = budget.status()
+				budget.maybe_send_alert(st)
 				raise BudgetExceededError(
 					f"browser-use daily budget exceeded: spent=${st.spent_usd:.4f}, limit=${st.limit_usd:.2f}"
 				)
@@ -261,6 +337,7 @@ class BrowserUseBudget:
 				logger.warning(
 					f"[Budget] browser-use daily budget reached: spent=${st.spent_usd:.4f} / ${st.limit_usd:.2f}"
 				)
+				budget.maybe_send_alert(st)
 
 			return result
 

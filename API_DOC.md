@@ -218,6 +218,10 @@ with requests.post(url, json=payload, stream=True) as r:
   - 默认阈值：50 USD（可用 `BROWSER_USE_DAILY_BUDGET_USD` 调整）
   - 状态存储：`output/browser_use_budget.sqlite`（可用 `BROWSER_USE_BUDGET_DB_PATH` 调整；按 `BROWSER_USE_BUDGET_TZ` 分日，默认 Asia/Shanghai）
   - 计费：使用本地价格表 `pricing/token_cost_pricing.json`（可用 `BROWSER_USE_PRICING_DATA_PATH` 覆盖）；usage 缺失按 0 计
+  - 告警（可选）：配置飞书群机器人 Webhook 后，达到阈值会在群里发送一次告警（同一天只发一次）
+    - `FEISHU_BUDGET_ALERT_WEBHOOK_URL`：机器人 webhook 地址
+    - `FEISHU_BUDGET_ALERT_WEBHOOK_SECRET`：可选，安全密钥（签名）
+    - `FEISHU_BUDGET_ALERT_AT_ALL`：可选，是否 @所有人（true/1 开启）
 - **结束判断**：收到 `type=done` 或 `type=error` 即结束；若未收到就断开则视为失败/取消
 - **超时**：默认 1200s，超时后发送 `type=error` 并断开
 - **心跳**：30s 无任何输出才发送，用于保持连接
