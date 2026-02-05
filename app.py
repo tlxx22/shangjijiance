@@ -225,7 +225,12 @@ async def embedding(http_request: Request):
             payload = {"text": text_fallback}
 
         req = EmbeddingRequest.model_validate(payload)
-        model_name, vector = await asyncio.to_thread(get_text_embedding, req.text, model=req.model)
+        model_name, vector = await asyncio.to_thread(
+            get_text_embedding,
+            req.text,
+            model=req.model,
+            dimensions=req.dimension,
+        )
         return {"model": model_name, "embedding": vector}
     except ValueError as e:
         raise HTTPException(400, str(e))

@@ -10,12 +10,26 @@ import trans
 
 DEFAULT_SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 DEFAULT_SILICONFLOW_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-8B"
-DEFAULT_SILICONFLOW_EMBEDDING_DIMENSIONS = 1024
+DEFAULT_SILICONFLOW_EMBEDDING_DIMENSIONS = 2048
 DEFAULT_SILICONFLOW_EMBEDDING_ENCODING_FORMAT = "float"
 
 DEFAULT_SANY_EMBEDDING_MODEL = "text-embedding-v4"
-DEFAULT_SANY_EMBEDDING_DIMENSIONS = 1024
+DEFAULT_SANY_EMBEDDING_DIMENSIONS = 2048
 DEFAULT_SANY_EMBEDDING_ENCODING_FORMAT = "float"
+
+
+def _map_backend_embedding_model(model_name: str, *, route: str) -> str:
+	"""
+	Backend compatibility mapping.
+
+	- Yaowu backend may send "text-embedding-v4" (with or without leading/trailing spaces)
+	  while the actual deployed embedding model is "Qwen/Qwen3-Embedding-8B".
+	- Only apply this mapping for non-SANY routes.
+	"""
+	m = (model_name or "").strip()
+	if route != "sany" and m == "text-embedding-v4":
+		return DEFAULT_SILICONFLOW_EMBEDDING_MODEL
+	return m
 
 
 def _normalize_sany_ali_base_url(base_url: str) -> str:
@@ -107,6 +121,7 @@ def get_text_embedding(
 
 	base_url = os.getenv("SILICONFLOW_BASE_URL", DEFAULT_SILICONFLOW_BASE_URL).strip()
 	model_name = (model or os.getenv("SILICONFLOW_EMBEDDING_MODEL") or DEFAULT_SILICONFLOW_EMBEDDING_MODEL).strip()
+	model_name = _map_backend_embedding_model(model_name, route=route)
 	dims = dimensions or int(os.getenv("SILICONFLOW_EMBEDDING_DIMENSIONS") or DEFAULT_SILICONFLOW_EMBEDDING_DIMENSIONS)
 	enc = (encoding_format or os.getenv("SILICONFLOW_EMBEDDING_ENCODING_FORMAT") or DEFAULT_SILICONFLOW_EMBEDDING_ENCODING_FORMAT).strip()
 

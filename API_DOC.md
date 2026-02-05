@@ -166,6 +166,7 @@ data: {"type":"error","request_id":"a1b2c3d4","message":"timeout"}
 | 400 | 参数校验失败 | `{"detail": [{"loc":["body","date_start"],"msg":"...","type":"..."}]}` |
 | 400 | category 不存在 | `{"detail": "未知 category: xxx"}` |
 | 429 | Worker 繁忙 | `{"detail": "Worker busy"}` |
+| 429 | browser-use 日预算已达上限 | `{"detail": "Daily browser-use budget exceeded: spent=$50.3456, limit=$50.00"}` |
 
 ---
 
@@ -213,6 +214,10 @@ with requests.post(url, json=payload, stream=True) as r:
 ## 备注
 
 - **并发控制**：每个 Worker 同时只处理一个爬取任务，超出时返回 429
+- **日预算熔断（browser-use）**：按天累计导航/规划阶段的 LLM 调用成本；达到阈值后新 `/crawl` 直接 429，进行中的任务也可能在下一次 LLM 调用前中止并通过 SSE `type=error` 返回（并发下可能略微超额）
+  - 默认阈值：50 USD（可用 `BROWSER_USE_DAILY_BUDGET_USD` 调整）
+  - 状态存储：`output/browser_use_budget.sqlite`（可用 `BROWSER_USE_BUDGET_DB_PATH` 调整；按 `BROWSER_USE_BUDGET_TZ` 分日，默认 Asia/Shanghai）
+  - 计费：使用本地价格表 `pricing/token_cost_pricing.json`（可用 `BROWSER_USE_PRICING_DATA_PATH` 覆盖）；usage 缺失按 0 计
 - **结束判断**：收到 `type=done` 或 `type=error` 即结束；若未收到就断开则视为失败/取消
 - **超时**：默认 1200s，超时后发送 `type=error` 并断开
 - **心跳**：30s 无任何输出才发送，用于保持连接
@@ -230,21 +235,23 @@ with requests.post(url, json=payload, stream=True) as r:
 ```json
 {
   "text": "公告名称",
-  "model": "Qwen/Qwen3-Embedding-8B"
+  "model": "Qwen/Qwen3-Embedding-8B",
+  "dimension": 2048
 }
 ```
 
 
 说明：
 - `model` 可选；不传会根据 `trans.py` 的 `ROUTE` 选择默认模型：
-  - `ROUTE="official"`：默认 `Qwen/Qwen3-Embedding-8B`（硅基流动）
   - `ROUTE="sany"`：默认 `text-embedding-v4`（三一网关 Ali embeddings）
-- embedding 向量维度：默认返回 **1024 维**（不论 `official` 还是 `sany` 路由）。
+  - 其他（`official`/`openai`）：默认 `Qwen/Qwen3-Embedding-8B`（硅基流动）
+- `dimension` 可选，默认 `2048`；服务端会尽量透传到上游 `dimensions` 参数，若上游不支持则回退并对向量进行截断/补零以保证维度一致
+- 兼容要务后端：当 `ROUTE!="sany"` 且传入 `model="text-embedding-v4"` 时，会自动映射为 `Qwen/Qwen3-Embedding-8B`
 - 需在服务端配置环境变量（按路由选择其一）：
-  - `ROUTE="official"`：`SILICONFLOW_API_KEY`，可选 `SILICONFLOW_BASE_URL`/`SILICONFLOW_EMBEDDING_MODEL`/`SILICONFLOW_EMBEDDING_DIMENSIONS`/`SILICONFLOW_EMBEDDING_ENCODING_FORMAT`
+  - `ROUTE="official"`/`"openai"`：`SILICONFLOW_API_KEY`，可选 `SILICONFLOW_BASE_URL`/`SILICONFLOW_EMBEDDING_MODEL`/`SILICONFLOW_EMBEDDING_DIMENSIONS`/`SILICONFLOW_EMBEDDING_ENCODING_FORMAT`
   - `ROUTE="sany"`：`SANY_AI_GATEWAY_KEY`、`SANY_AI_GATEWAY_BASE_URL`，可选 `SANY_EMBEDDING_MODEL`/`SANY_EMBEDDING_DIMENSIONS`/`SANY_EMBEDDING_ENCODING_FORMAT`
 - 路由行为：
-  - `ROUTE="official"`：服务端调用 `SiliconFlow` 的 OpenAI 协议 embeddings（`{SILICONFLOW_BASE_URL}/embeddings`）
+  - `ROUTE="official"`/`"openai"`：服务端调用 `SiliconFlow` 的 OpenAI 协议 embeddings（`{SILICONFLOW_BASE_URL}/embeddings`）
   - `ROUTE="sany"`：服务端调用三一网关 embeddings（`{SANY_AI_GATEWAY_BASE_URL}/ai-api/ali/embeddings`，OpenAI 协议：`base_url` 设为 `{SANY_AI_GATEWAY_BASE_URL}/ai-api/ali`）
 
 ### 响应（200）

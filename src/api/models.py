@@ -42,6 +42,7 @@ class EmbeddingRequest(BaseModel):
     """向量化请求"""
     text: constr(min_length=1) = Field(description="待向量化的文本（通常为公告名称）")
     model: str | None = Field(default=None, description="可选：覆盖默认 embedding 模型名")
+    dimension: int = Field(default=2048, ge=1, description="可选：embedding 向量维度（dimension），默认 2048")
 
 
 class EmbeddingResponse(BaseModel):

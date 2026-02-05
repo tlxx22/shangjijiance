@@ -280,7 +280,7 @@ def get_budget() -> BrowserUseBudget:
 	"""
 	global _BUDGET_SINGLETON
 	if _BUDGET_SINGLETON is None:
-		limit = float(os.getenv("BROWSER_USE_DAILY_BUDGET_USD") or "0.3")
+		limit = float(os.getenv("BROWSER_USE_DAILY_BUDGET_USD") or "50")
 		db_path = Path(os.getenv("BROWSER_USE_BUDGET_DB_PATH") or (Path("output") / "browser_use_budget.sqlite"))
 		pricing_path = Path(os.getenv("BROWSER_USE_PRICING_DATA_PATH") or (_repo_root() / "pricing" / "token_cost_pricing.json"))
 		_BUDGET_SINGLETON = BrowserUseBudget(limit_usd=limit, db_path=db_path, pricing_path=pricing_path)
