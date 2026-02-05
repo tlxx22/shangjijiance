@@ -337,6 +337,36 @@ class LotProduct(BaseModel):
 	models: str = Field(default="", validation_alias=AliasChoices("models", "标的物型号", "型号"))
 	unitPrices: str = Field(default="", validation_alias=AliasChoices("unitPrices", "标的物单价", "单价"))
 	quantities: str = Field(default="", validation_alias=AliasChoices("quantities", "标的物数量", "数量"))
+	quantityUnit: str = Field(default="", validation_alias=AliasChoices("quantityUnit", "quantity_unit", "数量单位", "单位"))
+
+	@model_validator(mode="before")
+	@classmethod
+	def _infer_quantity_unit(cls, v: Any):
+		"""
+		Backward-compatible parsing:
+		- If quantityUnit is missing but quantities looks like "1台"/"2 套", extract the trailing unit.
+		"""
+		if not isinstance(v, dict):
+			return v
+
+		unit_raw = v.get("quantityUnit") or v.get("quantity_unit") or v.get("数量单位") or v.get("单位")
+		unit_text = ("" if unit_raw is None else str(unit_raw)).strip()
+		if unit_text and unit_text.lower() not in _EMPTY_STRINGS:
+			return v
+
+		q_raw = v.get("quantities") or v.get("数量") or v.get("标的物数量")
+		if isinstance(q_raw, str):
+			s = q_raw.strip()
+			# e.g. "1台", "2 套", "3m"
+			m = re.search(r"\d+(?:\.\d+)?\s*([^\d\s]+)$", s)
+			if m:
+				unit = m.group(1).strip()
+				if unit and unit.lower() not in _EMPTY_STRINGS:
+					nv = dict(v)
+					nv["quantityUnit"] = unit
+					return nv
+
+		return v
 
 	@field_validator("lotNumber", mode="before")
 	@classmethod
@@ -362,7 +392,7 @@ class LotProduct(BaseModel):
 		parts = _normalize_int_list(v)
 		return parts[0] if parts else ""
 
-	@field_validator("subjects", "productCategory", "models", mode="before")
+	@field_validator("subjects", "productCategory", "models", "quantityUnit", mode="before")
 	@classmethod
 	def _text_single(cls, v: Any) -> str:
 		if isinstance(v, str):
@@ -414,7 +444,10 @@ class LotProducts(RootModel[list[LotProduct]]):
 			product_categories = _to_str_list(item.get("productCategory"))
 			models = _to_str_list(item.get("models"))
 			unit_prices = _normalize_price_list(item.get("unitPrices"))
-			quantities = _normalize_int_list(item.get("quantities"))
+			quantities = _to_str_list(item.get("quantities"))
+			quantity_units = _to_str_list(
+				item.get("quantityUnit") or item.get("quantity_unit") or item.get("数量单位") or item.get("单位")
+			)
 
 			row_count = max(
 				len(subjects),
@@ -422,6 +455,7 @@ class LotProducts(RootModel[list[LotProduct]]):
 				len(models),
 				len(unit_prices),
 				len(quantities),
+				len(quantity_units),
 			)
 			if row_count <= 0:
 				continue
@@ -445,6 +479,7 @@ class LotProducts(RootModel[list[LotProduct]]):
 						"models": _pick(models, idx),
 						"unitPrices": _pick(unit_prices, idx),
 						"quantities": _pick(quantities, idx),
+						"quantityUnit": _pick(quantity_units, idx),
 					}
 				)
 
