@@ -135,7 +135,7 @@ No markdown, no code fences, no extra text.
 Rules:
 - Treat the input as plain text; do not require it to be valid JSON.
 - Fill missing fields with the correct empty value by type (string=\"\", number=null, array=[], boolean=false).
-- Money amounts are in 单位“万元”.
+- Money amounts are in 单位“元” (convert 万/亿 to 元 if needed).
 - Dates are YYYY-MM-DD.
 """.strip()
 

@@ -485,7 +485,7 @@ from .field_schemas import (
 	LotProducts,
 	LotCandidates,
 	normalize_announcement_type,
-	_to_wan_yuan,
+	_to_yuan,
 	normalize_date_ymd,
 	normalize_estimated_amount,
 )
@@ -802,7 +802,7 @@ async def extract_fields_from_page(browser_session, llm, site_name: str, stage: 
 **重要提示：**
 - 仔细阅读页面内容，提取上述所有字段
 - 按类型填写空值（string填\"\"，number填null，array填[]）
-- 金额字段单位为“万元”，无单位数字视为万元
+- 金额字段单位为“元”，如页面为“万元/亿”需换算成“元”
 - 日期字段格式为 YYYY-MM-DD（如 2026-02-16）
 - 只返回 JSON，不要解释、不要代码块
 - 不要执行任何点击或导航操作，只读取当前页面
@@ -1112,7 +1112,7 @@ No markdown, no code fences, no extra text.
 
 Rules:
 - Fill missing fields with the correct empty value by type (string=\"\", number=null, array=[]).
-- Money amounts are in 单位“万元”.
+- Money amounts are in 单位“元” (convert 万/亿 to 元 if needed).
 - Dates are YYYY-MM-DD.
 """.strip()
 
@@ -1166,7 +1166,7 @@ def normalize_field_value(key: str, value: Any, field_type: str):
 		return []
 
 	if field_type == "number":
-		return _to_wan_yuan(value)
+		return _to_yuan(value)
 
 	if field_type == "boolean":
 		if isinstance(value, bool):

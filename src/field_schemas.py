@@ -2,7 +2,7 @@
 字段 Schema 与归一化工具（V2）
 
 - 公告类别（13 选 1）归一化
-- 金额单位统一为“万元”
+- 金额单位统一为“元”
 - lotProducts / lotCandidates Pydantic 模型（容错输入 + 统一输出）
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel, AliasChoices, field_validator, model_validator
@@ -108,22 +109,35 @@ def normalize_announcement_type(raw: Any) -> str:
 	return "招标"
 
 
-# ===== 金额（万元）=====
+# ===== 金额（元）=====
 
-def _to_wan_yuan(v: Any) -> Optional[float]:
+def _parse_money_to_yuan_decimal(v: Any) -> Optional[tuple[Decimal, int]]:
 	"""
-	转换为万元，保留两位小数
+	将金额解析并换算为“元”，同时保留原始数值的小数位数。
 
 	规则：
-	- 数字/纯数字字符串：视为“万元”
-	- 含“亿”：换算为万元（1 亿 = 10000 万元）
-	- 含“万”：视为万元
-	- 含“元”：换算为万元（1 元 = 0.0001 万元）
+	- 数字/纯数字字符串：视为“元”
+	- 含“亿”：换算为元（1 亿 = 100000000 元）
+	- 含“万”：换算为元（1 万 = 10000 元）
+	- 含“元”：视为元
 	"""
 	if v is None:
 		return None
-	if isinstance(v, (int, float)):
-		return round(float(v), 2)
+	if isinstance(v, (int, float, Decimal)):
+		sv = str(v)
+		dp = 0
+		if "." in sv:
+			dp = len(sv.split(".", 1)[1])
+		try:
+			dec = Decimal(sv)
+		except InvalidOperation:
+			return None
+		if dp > 0:
+			quant = Decimal(1).scaleb(-dp)
+			dec = dec.quantize(quant, rounding=ROUND_HALF_UP)
+		else:
+			dec = dec.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+		return dec, dp
 
 	s = str(v).strip()
 	if not s:
@@ -131,36 +145,62 @@ def _to_wan_yuan(v: Any) -> Optional[float]:
 	s = s.replace(",", "").replace("，", "")
 	s = s.replace("人民币", "").replace("￥", "").replace("¥", "")
 
-	# 纯数字：视为万元
-	if re.match(r"^\d+(\.\d+)?$", s):
-		return round(float(s), 2)
-
 	# 范围值不应进入 number 字段
 	if "~" in s or "～" in s or "-" in s:
 		return None
 
-	multiplier = 1.0
+	multiplier = Decimal(1)
 	if "亿" in s:
-		multiplier = 10000.0
+		multiplier = Decimal("100000000")
 		s = s.replace("亿", "")
-	if "万" in s:
-		multiplier = 1.0
+	elif "万" in s:
+		multiplier = Decimal("10000")
 		s = s.replace("万", "")
-	if "元" in s:
-		# 仅当未出现“万/亿”时才按元处理
-		if multiplier == 1.0:
-			multiplier = 0.0001
-		s = s.replace("元", "")
+	s = s.replace("元", "")
 
 	m = re.search(r"(\d+(?:\.\d+)?)", s)
 	if not m:
 		return None
-	return round(float(m.group(1)) * multiplier, 2)
+	num_str = m.group(1)
+	dp = 0
+	if "." in num_str:
+		dp = len(num_str.split(".", 1)[1])
+	try:
+		num_dec = Decimal(num_str)
+	except InvalidOperation:
+		return None
+
+	val = num_dec * multiplier
+	if dp > 0:
+		quant = Decimal(1).scaleb(-dp)
+		val = val.quantize(quant, rounding=ROUND_HALF_UP)
+	else:
+		val = val.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+	return val, dp
+
+
+def _to_yuan(v: Any) -> Optional[float]:
+	parsed = _parse_money_to_yuan_decimal(v)
+	if not parsed:
+		return None
+	val, _dp = parsed
+	try:
+		return float(val)
+	except Exception:
+		return None
+
+
+def _to_yuan_str(v: Any) -> Optional[str]:
+	parsed = _parse_money_to_yuan_decimal(v)
+	if not parsed:
+		return None
+	val, _dp = parsed
+	return format(val, "f")
 
 
 def normalize_estimated_amount(v: Any) -> str:
 	"""
-	归一化 estimatedAmount 为 \"下限~上限\"（万元，两位小数）
+	归一化 estimatedAmount 为 \"下限~上限\"（元；小数位数尽量与页面一致）
 	"""
 	if v is None:
 		return ""
@@ -173,11 +213,11 @@ def normalize_estimated_amount(v: Any) -> str:
 	if len(parts) != 2:
 		return s
 
-	lo = _to_wan_yuan(parts[0])
-	hi = _to_wan_yuan(parts[1])
+	lo = _to_yuan_str(parts[0])
+	hi = _to_yuan_str(parts[1])
 	if lo is None or hi is None:
 		return s
-	return f"{lo:.2f}~{hi:.2f}"
+	return f"{lo}~{hi}"
 
 
 def normalize_date_ymd(v: Any) -> str:
@@ -220,7 +260,7 @@ def _join_list(v: Any) -> str:
 
 def _normalize_price_list_str(v: Any) -> str:
 	"""
-	将 \"100万,200万\" / [100,200] 归一化为 \"100.00,200.00\"（万元）
+	将 \"100万,200万\" / [100,200] 归一化为 \"1000000,2000000\"（元；小数位数与页面一致）
 	"""
 	raw = _join_list(v)
 	if not raw:
@@ -228,8 +268,8 @@ def _normalize_price_list_str(v: Any) -> str:
 	parts = [p.strip() for p in re.split(_SEP, raw) if p.strip()]
 	out: list[str] = []
 	for p in parts:
-		val = _to_wan_yuan(p)
-		out.append(f"{val:.2f}" if val is not None else p)
+		val = _to_yuan_str(p)
+		out.append(val if val is not None else p)
 	return ",".join(out)
 
 
@@ -290,13 +330,13 @@ def _to_str_list(v: Any) -> list[str]:
 
 def _normalize_price_list(v: Any) -> list[str]:
 	"""
-	将 \"100万,200万\" / [100,200] 归一化为 [\"100.00\",\"200.00\"]（万元）
+	将 \"100万,200万\" / [100,200] 归一化为 [\"1000000\",\"2000000\"]（元；小数位数与页面一致）
 	"""
 	parts = _to_str_list(v)
 	out: list[str] = []
 	for p in parts:
-		val = _to_wan_yuan(p)
-		out.append(f"{val:.2f}" if val is not None else p)
+		val = _to_yuan_str(p)
+		out.append(val if val is not None else p)
 	return out
 
 
@@ -312,15 +352,15 @@ def _normalize_int_list(v: Any) -> list[str]:
 	return out
 
 
-def _normalize_wan_yuan_number(v: Any) -> Optional[float]:
+def _normalize_yuan_number(v: Any) -> Optional[float]:
 	"""
-	容错地从标量/列表/逗号分隔字符串中提取一个金额（万元）。
+	容错地从标量/列表/逗号分隔字符串中提取一个金额（元）。
 	"""
 	for part in _to_str_list(v):
-		val = _to_wan_yuan(part)
+		val = _to_yuan(part)
 		if val is not None:
 			return val
-	return _to_wan_yuan(v)
+	return _to_yuan(v)
 
 
 # ===== lotProducts =====
@@ -579,13 +619,13 @@ class LotCandidates(RootModel[list[LotCandidate]]):
 
 			# Backward compatibility: old schema fields (winner/winningAmount) may still appear.
 			winner = _join_list(item.get("winner"))
-			winning_amount = _normalize_wan_yuan_number(item.get("winningAmount"))
+			winning_amount_text = _to_yuan_str(item.get("winningAmount"))
 
 			candidates = _to_str_list(item.get("candidates"))
 			candidate_prices = _normalize_price_list(item.get("candidatePrices"))
 
 			row_count = max(len(candidates), len(candidate_prices))
-			keep_one = row_count > 0 or bool(winner) or (winning_amount is not None)
+			keep_one = row_count > 0 or bool(winner) or bool(winning_amount_text)
 			if not keep_one:
 				continue
 
@@ -593,8 +633,8 @@ class LotCandidates(RootModel[list[LotCandidate]]):
 			# Convert that into one row (no guessing beyond extracted fields).
 			if row_count <= 0 and winner:
 				candidates = [winner]
-				if winning_amount is not None:
-					candidate_prices = [f"{winning_amount:.2f}"]
+				if winning_amount_text is not None:
+					candidate_prices = [winning_amount_text]
 				else:
 					candidate_prices = [""]
 				row_count = 1
