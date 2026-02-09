@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import contextlib
 import os
 from pathlib import Path
 from typing import Any
@@ -1534,7 +1535,22 @@ class SaveDetailParams(BaseModel):
 	date: str = Field(description="发布日期，格式 YYYY-MM-DD")
 
 
-def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item_saved=None) -> Tools:
+class OpenAndSaveParams(BaseModel):
+	"""在列表页点击并保存详情页的参数（原子操作）"""
+	index: int = Field(description="要点击的交互元素 index（通常为条目标题链接）")
+	title: str = Field(description="招标标题（用于保存文件名与字段抽取）")
+	date: str = Field(description="发布日期，格式 YYYY-MM-DD（用于保存文件名与字段抽取）")
+
+
+def create_save_detail_tools(
+	output_dir: Path,
+	site_name: str,
+	llm=None,
+	on_item_saved=None,
+	*,
+	list_tab_target_id: str | None = None,
+	list_url: str | None = None,
+) -> Tools:
 	"""
 	创建包含 save_detail action 的 Tools 实例
 
@@ -1543,6 +1559,8 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 		site_name: 网站名称
 		llm: LLM实例（用于字段提取Agent）
 		on_item_saved: 可选回调函数，保存成功时调用 on_item_saved(json_data)
+		list_tab_target_id: 列表页 tab 的 target_id（full id）；用于在保存后自动回收多余标签并回到列表页
+		list_url: 列表页 URL（可选）；用于同标签打开详情时 go_back 的兜底校验/回退
 
 	Returns:
 		配置好的 Tools 实例
@@ -1553,6 +1571,117 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 	# 而是在提示词里明确禁止使用 file tools 作为业务输出。
 	tools = Tools()
 	seen_detail_keys: set[str] = set()
+	# 列表页 tab（用于保存后自动关闭详情页并切回列表页）
+	_locked_list_target_id: str | None = list_tab_target_id
+	_locked_list_url: str | None = (list_url or "").strip() or None
+
+	async def _tab_gc(browser_session: BrowserSession) -> None:
+		"""
+		Best-effort tab garbage collection.
+
+		Goal: after save_detail, keep only the list tab so the Agent can continue reliably.
+		"""
+		nonlocal _locked_list_target_id
+		try:
+			state = await browser_session.get_browser_state_summary(include_screenshot=False)
+			tabs = list(getattr(state, "tabs", []) or [])
+			if not tabs:
+				return
+
+			# Pick the "list tab" to keep.
+			keep_id: str | None = None
+			if _locked_list_target_id and any(getattr(t, "target_id", None) == _locked_list_target_id for t in tabs):
+				keep_id = _locked_list_target_id
+			elif _locked_list_url:
+				for t in tabs:
+					try:
+						if (getattr(t, "url", "") or "").startswith(_locked_list_url):
+							keep_id = getattr(t, "target_id", None)
+							break
+					except Exception:
+						continue
+
+			if not keep_id:
+				# Fallback: keep current focused tab if possible.
+				keep_id = getattr(browser_session, "agent_focus_target_id", None) or getattr(tabs[0], "target_id", None)
+
+			if keep_id:
+				_locked_list_target_id = keep_id
+
+			# Close everything except keep_id.
+			from browser_use.browser.events import CloseTabEvent
+
+			for t in tabs:
+				tid = getattr(t, "target_id", None)
+				if not tid or tid == keep_id:
+					continue
+				try:
+					ev = browser_session.event_bus.dispatch(CloseTabEvent(target_id=str(tid)))
+					await ev
+					await ev.event_result(raise_if_any=False, raise_if_none=False)
+				except Exception:
+					# Stale/invalid targets are fine; treat as already closed.
+					continue
+
+			# Ensure focus on list tab.
+			if keep_id and getattr(browser_session, "agent_focus_target_id", None) != keep_id:
+				from browser_use.browser.events import SwitchTabEvent
+
+				try:
+					ev = browser_session.event_bus.dispatch(SwitchTabEvent(target_id=str(keep_id)))
+					await ev
+					await ev.event_result(raise_if_any=False, raise_if_none=False)
+				except Exception:
+					pass
+
+		except Exception as e:
+			logger.debug(f"[{site_name}] tab gc skipped: {e}")
+
+	async def _return_to_list_after_save(browser_session: BrowserSession, *, current_url: str | None) -> None:
+		"""
+		After saving a detail page, return to list context:
+		- If detail opened in new tab: close current tab and switch back to list tab.
+		- If detail opened in same tab: go_back (best-effort) and keep only list tab.
+		"""
+		nonlocal _locked_list_target_id
+		try:
+			current_target_id = getattr(browser_session, "agent_focus_target_id", None)
+			list_target_id = _locked_list_target_id
+
+			if list_target_id and current_target_id and current_target_id != list_target_id:
+				# Likely: detail in new tab -> close it then switch to list tab.
+				from browser_use.browser.events import CloseTabEvent, SwitchTabEvent
+
+				with contextlib.suppress(Exception):
+					ev = browser_session.event_bus.dispatch(CloseTabEvent(target_id=str(current_target_id)))
+					await ev
+					await ev.event_result(raise_if_any=False, raise_if_none=False)
+
+				with contextlib.suppress(Exception):
+					ev = browser_session.event_bus.dispatch(SwitchTabEvent(target_id=str(list_target_id)))
+					await ev
+					await ev.event_result(raise_if_any=False, raise_if_none=False)
+
+			else:
+				# Same-tab flow (or list tab unknown): go back only if we are NOT already on list_url.
+				should_go_back = True
+				if _locked_list_url and current_url and current_url.startswith(_locked_list_url):
+					should_go_back = False
+				if should_go_back:
+					from browser_use.browser.events import GoBackEvent
+
+					with contextlib.suppress(Exception):
+						ev = browser_session.event_bus.dispatch(GoBackEvent())
+						await ev
+
+			# Final cleanup: keep only list tab (or current tab as fallback).
+			await _tab_gc(browser_session)
+
+			# Small wait to let list page settle after close/go_back.
+			await asyncio.sleep(2)
+
+		except Exception as e:
+			logger.debug(f"[{site_name}] return-to-list skipped: {e}")
 
 	@tools.action(
 		'保存当前详情页的公告正文原始内容(HTML)和结构化字段到文件。在切换到详情页标签页后调用此工具。',
@@ -1573,6 +1702,7 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 
 		logger.info(f"[{site_name}] 保存详情页: {title[:40]}...")
 
+		detail_url: str | None = None
 		try:
 			# 1. 确保输出目录存在
 			output_dir.mkdir(parents=True, exist_ok=True)
@@ -1588,6 +1718,36 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 			except Exception as e:
 				logger.warning(f"获取URL失败: {e}")
 				detail_url = "unknown"
+
+			# 2.2 保护：如果还停留在列表页（URL 仍是列表页 URL），说明并未真正进入详情页。
+			# 这种情况下继续保存会把“列表页 URL”写进去，导致去重误判、甚至把列表页当详情页保存。
+			try:
+				from urllib.parse import urlsplit
+
+				if _locked_list_url and detail_url and detail_url not in ("unknown", ""):
+					list_parts = urlsplit(_locked_list_url)
+					cur_parts = urlsplit(detail_url)
+					same_route = (
+						list_parts.scheme == cur_parts.scheme
+						and list_parts.netloc == cur_parts.netloc
+						and list_parts.path == cur_parts.path
+					)
+					if same_route:
+						logger.warning(
+							f"[{site_name}] ⚠️ save_detail 在列表页被调用（URL 未进入详情页）: {detail_url}"
+						)
+						with contextlib.suppress(Exception):
+							await _tab_gc(browser_session)
+						return ActionResult(
+							extracted_content=(
+								"当前仍在列表页（URL 未进入详情页），请改用 open_and_save(标题链接index, title, date) "
+								"或先切换到真正的详情页标签后再调用 save_detail。"
+							),
+							error="not_on_detail_page",
+						)
+			except Exception:
+				# 保护逻辑失败不应阻断正常保存
+				pass
 
 			# 2.5 去重：网站列表可能在爬取过程中从第一页插入新公告，导致后续页码内容“整体后移”并出现重复。
 			# 这里以“详情页 URL”为主键去重；取不到 URL 时退化为 title+date。
@@ -1690,6 +1850,9 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 				except Exception as cb_err:
 					logger.warning(f"[{site_name}] 回调执行失败: {cb_err}")
 
+			# 保存成功后：自动关闭详情页并回到列表页，避免标签页堆积导致后续切错/重复保存。
+			await _return_to_list_after_save(browser_session, current_url=str(detail_url or ""))
+
 			return ActionResult(
 				extracted_content=f"✓ 已保存: {filename}.json",
 				long_term_memory=f"已保存详情页正文(HTML): {title[:30]}..."
@@ -1697,9 +1860,115 @@ def create_save_detail_tools(output_dir: Path, site_name: str, llm=None, on_item
 
 		except Exception as e:
 			logger.error(f"[{site_name}] 保存详情页失败: {e}")
+			# 失败也尝试回到列表页，避免卡在详情页导致标签页越来越多
+			with contextlib.suppress(Exception):
+				await _return_to_list_after_save(browser_session, current_url=str(detail_url or ""))
 			return ActionResult(
 				extracted_content=f"保存失败: {e}",
 				error=str(e)
 			)
+
+	@tools.action(
+		'在列表页原子化完成：点击指定 index 打开详情页（处理新标签/同标签两种情况）→ 调用 save_detail 保存 → 自动回到列表页并回收多余标签。',
+		param_model=OpenAndSaveParams
+	)
+	async def open_and_save(params: OpenAndSaveParams, browser_session: BrowserSession):
+		"""
+		用于避免 Agent “点了但没保存/没切换标签/忘记 close” 等问题：
+		- 通过 index 点击标题（或其它可打开详情的元素）
+		- 检测是否打开了新标签或发生了同标签导航
+		- 必要时自动 switch 到详情页
+		- 调用 save_detail 完成保存（保存后会自动回到列表页并做 tab GC）
+		"""
+		index = int(params.index)
+		title = params.title
+		date = params.date
+
+		# 记录点击前的 tab/URL 状态
+		state_before = await browser_session.get_browser_state_summary(include_screenshot=False)
+		if getattr(state_before, "dom_state", None) and getattr(state_before.dom_state, "selector_map", None):
+			with contextlib.suppress(Exception):
+				browser_session.update_cached_selector_map(state_before.dom_state.selector_map)
+
+		tabs_before = [getattr(t, "target_id", None) for t in (getattr(state_before, "tabs", []) or [])]
+		tabs_before_set = {t for t in tabs_before if t}
+		url_before = getattr(state_before, "url", "") or ""
+
+		# 找到要点击的节点
+		node = await browser_session.get_dom_element_by_index(index)
+		if not node:
+			# 兜底：刷新一次 DOM 再尝试
+			state_refresh = await browser_session.get_browser_state_summary(include_screenshot=False)
+			if getattr(state_refresh, "dom_state", None) and getattr(state_refresh.dom_state, "selector_map", None):
+				with contextlib.suppress(Exception):
+					browser_session.update_cached_selector_map(state_refresh.dom_state.selector_map)
+			node = await browser_session.get_dom_element_by_index(index)
+
+		if not node:
+			return ActionResult(
+				extracted_content=f"index={index} 未找到可点击元素（DOM 可能已变化），请重新在当前页面选择正确的标题链接 index。",
+				error="element_not_found",
+			)
+
+		# 点击
+		from browser_use.browser.events import ClickElementEvent
+
+		click_err: Exception | None = None
+		try:
+			ev = browser_session.event_bus.dispatch(ClickElementEvent(node=node))
+			await ev
+			await ev.event_result(raise_if_any=False, raise_if_none=False)
+		except Exception as e:
+			click_err = e
+			logger.debug(f"[{site_name}] open_and_save click 失败: index={index}, err={e}")
+
+		# 等待并检测是否打开了新 tab 或发生了同标签导航
+		new_tab_id: str | None = None
+		navigated_same_tab = False
+
+		for _ in range(10):  # 最多等待约 5 秒
+			await asyncio.sleep(0.5)
+			state_after = await browser_session.get_browser_state_summary(include_screenshot=False)
+			if getattr(state_after, "dom_state", None) and getattr(state_after.dom_state, "selector_map", None):
+				with contextlib.suppress(Exception):
+					browser_session.update_cached_selector_map(state_after.dom_state.selector_map)
+
+			tabs_after = [getattr(t, "target_id", None) for t in (getattr(state_after, "tabs", []) or [])]
+			new_tabs = [t for t in tabs_after if t and t not in tabs_before_set]
+			if new_tabs:
+				new_tab_id = new_tabs[-1]
+				break
+
+			url_after = getattr(state_after, "url", "") or ""
+			if url_after and url_after != url_before:
+				navigated_same_tab = True
+				break
+
+		if new_tab_id:
+			from browser_use.browser.events import SwitchTabEvent
+
+			try:
+				ev = browser_session.event_bus.dispatch(SwitchTabEvent(target_id=str(new_tab_id)))
+				await ev
+				await ev.event_result(raise_if_any=False, raise_if_none=False)
+			except Exception as e:
+				logger.debug(f"[{site_name}] open_and_save switch 失败: target_id={new_tab_id}, err={e}")
+			await asyncio.sleep(1)
+
+		elif not navigated_same_tab:
+			# 没有打开新 tab，也没有发生导航：大概率点错了（例如点到了“进行中/已结束”状态列）。
+			with contextlib.suppress(Exception):
+				await _tab_gc(browser_session)
+			return ActionResult(
+				extracted_content=(
+					"点击后未进入详情页（无新标签、URL 未变化）。"
+					"请改为点击该条目的【标题链接】对应的 index，再调用 open_and_save 重试。"
+					+ (f"（click_err: {click_err}）" if click_err else "")
+				),
+				error="detail_not_opened",
+			)
+
+		# 已进入详情页（或已切到新 tab）：直接复用 save_detail 的保存逻辑
+		return await save_detail(params=SaveDetailParams(title=title, date=date), browser_session=browser_session)
 
 	return tools

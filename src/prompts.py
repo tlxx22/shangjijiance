@@ -10,10 +10,12 @@ GLOBAL_RULES = """
 
 **IMPORTANT: business output must go through our toolchain**
 
-- When you are on a detail page and need to "save/output" an announcement, you MUST call `save_detail` (this is the only action that triggers backend persistence + SSE item output).
+- To save/output an announcement you MUST go through our tools:
+  - Preferred (from list page): call `open_and_save(index, title, date)` (it will click → handle new-tab/same-tab → call `save_detail` → return to list and clean tabs).
+  - Only when you are already on a detail page: call `save_detail(title, date)` (this is the only action that triggers backend persistence + SSE item output).
 - `write_file` / `replace_file` / `read_file` are NOT disabled, but do not call them unless explicitly asked for debugging; never use them as a substitute for `save_detail`.
 - Do not create or maintain `todo.md` / `results.md` as progress or deliverables. Those files are not consumed by the backend and do not count as saved items.
-- If you notice you are writing files instead of calling `save_detail`, stop writing files immediately and return to the main flow: `switch/wait -> save_detail -> close/switch (or go_back)`.
+- If you notice you are writing files instead of calling `open_and_save`/`save_detail`, stop writing files immediately and return to the main flow.
 
 ---
 
@@ -21,52 +23,23 @@ GLOBAL_RULES = """
 
 **1. 标签页操作规范**
 
-🚨🚨🚨 **标签页操作流程 - 必须严格按顺序执行** 🚨🚨🚨
+🚨🚨🚨 **条目保存必须原子化执行** 🚨🚨🚨
 
-**【关键】不同网站的打开方式不同，必须先判断！**
+处理列表中的每一条公告时，默认使用以下“原子操作”：
 
-当需要打开详情页时，按以下流程操作：
-
-**步骤1：点击前记录标签数**
-- 查看 browser_state 中的 tabs 数量，记为 N
-- 记录当前列表页 tab_id，记为 LIST_TAB（点击前的当前 tab）
-
-**步骤2：点击标题**
-- 点击条目标题
-
-**步骤3：判断打开方式**
-- 再次查看 browser_state 中的 tabs 数量，记为 M
-- 比较 M 和 N：
-  - 如果 M > N → 说明在**新标签**打开 → 执行【流程A】
-  - 如果 M = N → 说明在**当前标签**打开 → 执行【流程B】
-
-**【流程A：新标签打开】**
-1. switch → 切换到新标签（tabs 列表中最新的那个）
-2. wait → 等待 2 秒
-3. save_detail → 保存详情
-4. close → 关闭当前详情页标签
-5. switch → 切回 LIST_TAB（或剩余的列表页 tab）
-6. wait → 等待 2 秒，确保列表页可继续操作
-
-**【流程B：当前标签打开】**
-1. wait → 等待 2 秒
-2. save_detail → 保存详情
-3. go_back → 点击浏览器返回按钮
-4. wait → 等待 2 秒，确保列表页重新加载
+1) 在列表页找到该条目的【标题链接】对应的交互元素 `index`
+2) 直接调用 `open_and_save(index, title, date)`
+3) 只有当工具返回成功（无 error / 提示已保存）后，才允许继续下一条或翻页
 
 ⚠️⚠️⚠️ **严重警告** ⚠️⚠️⚠️
-- **必须先判断打开方式，再选择流程**，否则会导致浏览器崩溃！
-- 流程 A 和流程 B 的步骤都是**不可分割的原子操作**！
-- 在完成详情页处理并返回列表页之前，**绝对禁止**：
-  - 点击下一个条目
-  - 点击翻页按钮
-  - 执行任何其他操作
+- 仅“点击”不等于保存：没有成功调用 `open_and_save` / `save_detail` 就不算保存
+- `open_and_save` 返回 `detail_not_opened` 时，说明点错了（常见：点到“进行中/已结束”状态列）
+  - 必须改用标题链接的 index 重试
+  - 在成功保存或明确跳过前，禁止直接处理下一条
 
-**关于工具使用：**
-- `switch`：切换到指定标签（仅流程A使用）
-- `close`：关闭当前标签（仅流程A使用）
-- `go_back`：浏览器返回按钮（仅流程B使用）
-- `write_file` / `replace_file` / `read_file`：即使系统提示词提到，也**不要用于输出业务结果**；详情必须通过 `save_detail`
+**关于标签页：**
+- 一般不需要手动 `switch/close/go_back`；`open_and_save`/`save_detail` 会在保存后自动回到列表页并回收多余标签
+- 只有当你明确看到详情页已打开但 `open_and_save` 无法判断（极少数 SPA 场景），才允许在详情页直接调用 `save_detail`
 
 ---
 

@@ -124,8 +124,33 @@ async def process_entire_site(
 	"""
 	logger.info(f"[{site_name}] 开始处理网站，最多 {max_pages} 页...")
 
+	# 锁定列表页 tab（用于 save_detail 后自动回收标签并回到列表页）
+	list_tab_target_id = getattr(browser, "agent_focus_target_id", None)
+	list_url = None
+	try:
+		state = await browser.get_browser_state_summary(include_screenshot=False)
+		list_url = getattr(state, "url", None)
+		if not list_tab_target_id:
+			list_tab_target_id = getattr(browser, "agent_focus_target_id", None)
+		if not list_tab_target_id:
+			tabs = list(getattr(state, "tabs", []) or [])
+			if tabs:
+				list_tab_target_id = getattr(tabs[0], "target_id", None)
+	except Exception:
+		pass
+
+	if list_tab_target_id:
+		logger.info(f"[{site_name}] 锁定列表页 TAB: {str(list_tab_target_id)[-4:]} ({list_url or ''})")
+
 	# 创建自定义工具（传入 llm 用于字段提取，传入回调用于 SSE 输出）
-	tools = create_save_detail_tools(output_dir, site_name, llm=llm, on_item_saved=on_item_saved)
+	tools = create_save_detail_tools(
+		output_dir,
+		site_name,
+		llm=llm,
+		on_item_saved=on_item_saved,
+		list_tab_target_id=str(list_tab_target_id) if list_tab_target_id else None,
+		list_url=str(list_url) if list_url else None,
+	)
 
 	# 日期筛选指令（使用 API 传入的日期，否则默认近2天）
 	from datetime import datetime, timedelta
@@ -146,7 +171,7 @@ async def process_entire_site(
 
 IMPORTANT:
 - Do NOT use `write_file` / `replace_file` / `read_file` (e.g., todo.md/results.md) as business output or progress tracking.
-- The ONLY valid way to save/output an announcement is to call `save_detail` on the detail page.
+- The ONLY valid way to save/output an announcement is to call `open_and_save` (preferred, from list page) or `save_detail` (only when already on the detail page).
 
 **【第一步：筛选操作】**
 
@@ -183,8 +208,9 @@ IMPORTANT:
 
 1. **滚动查看**当前页面，找到符合条件的招标条目
 2. **提取信息**：记录标题和发布日期
-3. **点击标题**打开详情页（会在新标签页打开）
-4. **按全局规则执行标签页操作**：switch → wait → save_detail → close → switch → wait
+3. **原子化保存**：找到该条目标题链接对应的交互元素 index，调用 `open_and_save(index, title, date)`
+   - `open_and_save` 会自动：点击打开详情页（处理新标签/同标签）→ 保存（内部调用 `save_detail`）→ 回到列表页并回收多余标签
+   - 如果返回 `detail_not_opened`，说明点错了（常见：点到“进行中/已结束”状态列），请改用标题链接的 index 重试；不要直接处理下一条
 5. **继续处理**当前页面的下一个条目
 6. **当前页处理完后**，点击"下一页"翻到下一页
 7. **重复**直到处理完 {max_pages} 页或没有更多页面
@@ -242,8 +268,12 @@ IMPORTANT:
 			pages_processed = structured.pages_processed
 			titles = structured.titles
 			risk_control = structured.risk_control
-			# 使用 Agent 返回值和文件计数的较大值
-			final_count = max(saved_count, actual_saved)
+			# 以实际落盘文件数为准（Agent 可能会“自增” saved_count 但未真正调用 save_detail）
+			final_count = actual_saved
+			if saved_count != actual_saved:
+				logger.warning(
+					f"[{site_name}] ⚠️ saved_count 不一致：Agent={saved_count}，实际文件={actual_saved}（已以实际文件为准）"
+				)
 
 			if risk_control:
 				logger.warning(f"[{site_name}] ⚠️ 检测到风控，已处理 {pages_processed} 页，保存 {final_count} 条")
@@ -271,7 +301,11 @@ IMPORTANT:
 				pages_processed = result_data.get('pages_processed', 1)
 				titles = result_data.get('titles', [])
 				risk_control = result_data.get('risk_control', False)
-				final_count = max(saved_count, actual_saved)
+				final_count = actual_saved
+				if saved_count != actual_saved:
+					logger.warning(
+						f"[{site_name}] ⚠️ saved_count 不一致：Agent={saved_count}，实际文件={actual_saved}（已以实际文件为准）"
+					)
 
 				if risk_control:
 					logger.warning(f"[{site_name}] ⚠️ 检测到风控，已处理 {pages_processed} 页，保存 {final_count} 条")
@@ -328,8 +362,32 @@ async def process_all_page_items(
 	"""
 	logger.info(f"[{site_name}] 第 {page_num} 页：开始处理所有匹配条目...")
 
+	# 锁定列表页 tab（用于 save_detail 后自动回收标签并回到列表页）
+	list_tab_target_id = getattr(browser, "agent_focus_target_id", None)
+	list_url = None
+	try:
+		state = await browser.get_browser_state_summary(include_screenshot=False)
+		list_url = getattr(state, "url", None)
+		if not list_tab_target_id:
+			list_tab_target_id = getattr(browser, "agent_focus_target_id", None)
+		if not list_tab_target_id:
+			tabs = list(getattr(state, "tabs", []) or [])
+			if tabs:
+				list_tab_target_id = getattr(tabs[0], "target_id", None)
+	except Exception:
+		pass
+
+	if list_tab_target_id:
+		logger.info(f"[{site_name}] 锁定列表页 TAB: {str(list_tab_target_id)[-4:]} ({list_url or ''})")
+
 	# 创建自定义工具（传入 llm 用于字段提取）
-	tools = create_save_detail_tools(output_dir, site_name, llm=llm)
+	tools = create_save_detail_tools(
+		output_dir,
+		site_name,
+		llm=llm,
+		list_tab_target_id=str(list_tab_target_id) if list_tab_target_id else None,
+		list_url=str(list_url) if list_url else None,
+	)
 
 	# 构建日期筛选指令（仅第一页）
 	date_filter_instruction = ""
@@ -379,15 +437,14 @@ async def process_all_page_items(
 
 **你的任务：处理当前页面（第 {page_num} 页）的所有符合条件的招标条目**
 
-**完整处理流程（对每个符合条件的条目重复执行）：**
+	**完整处理流程（对每个符合条件的条目重复执行）：**
 
-1. **滚动查看**：在当前列表页滚动查看，找到一个符合筛选条件的条目
-2. **记录信息**：提取该条目的【完整标题】和【发布日期】（格式 YYYY-MM-DD）
-3. **点击打开**：点击该条目的标题链接（会在新标签页打开）
-4. **切换标签**：使用 `switch` 动作切换到新打开的详情页标签
-5. **保存详情**：调用 `save_detail` 工具（抓取公告原文MD + 字段），传入标题和日期参数
-6. **关闭标签**：使用 `close` 动作关闭当前详情页标签（会自动回到列表页）
-7. **继续处理**：回到步骤1，寻找下一个符合条件的条目
+ 1. **滚动查看**：在当前列表页滚动查看，找到一个符合筛选条件的条目
+ 2. **记录信息**：提取该条目的【完整标题】和【发布日期】（格式 YYYY-MM-DD）
+ 3. **原子化保存**：找到该条目标题链接对应的交互元素 index，调用 `open_and_save(index, title, date)`
+    - `open_and_save` 会自动：点击打开详情页（处理新标签/同标签）→ 保存（内部调用 `save_detail`）→ 回到列表页并回收多余标签
+    - 如果返回 `detail_not_opened`，说明点错了（常见：点到“进行中/已结束”状态列），请改用标题链接的 index 重试；不要直接处理下一条
+ 4. **继续处理**：回到步骤1，寻找下一个符合条件的条目
 
 **⚠️ 重要提示：**
 - 每个条目【只点击一次】，不要重复点击同一个条目
@@ -395,12 +452,10 @@ async def process_all_page_items(
 	- 尽可能处理当前页所有符合条件的条目
 - 当前页面所有符合条件的条目都处理完后，用 done 返回结果
 
-**关于标签页操作：**
-- `switch` 动作：切换到指定标签页（通过 tab_id）
-- `close` 动作：关闭指定标签页
-- 新标签页打开后，你需要查看 browser_state 中的 tabs 列表找到新标签的 tab_id
+	**关于标签页操作：**
+ - 一般不需要手动 `switch/close/go_back`；优先使用 `open_and_save`（已封装 tab 处理）
 
-**返回格式（JSON）：**
+	**返回格式（JSON）：**
 ```json
 {{"saved_count": N, "titles": ["标题1", "标题2", ...]}}
 ```
@@ -409,9 +464,10 @@ async def process_all_page_items(
 ```json
 {{"saved_count": 0, "titles": []}}
 ```
-"""
+	"""
 
 	try:
+		before_saved = count_saved_files(output_dir)
 		agent = Agent(
 			task=task,
 			llm=llm,
@@ -419,17 +475,20 @@ async def process_all_page_items(
 			tools=tools,
 			extend_system_message=GLOBAL_RULES,
 			max_failures=10,
-			# 每个条目大约需要8步：滚动+点击+switch+等待+save_detail+close+返回列表+下一个
+			# open_and_save 已封装“点击→切换→保存→返回列表”，减少遗漏保存的概率
 			step_timeout=600,
 		)
 
 		result = await agent.run(max_steps=99999)
 		output_raw = result.final_result()
 
+		after_saved = count_saved_files(output_dir)
+		actual_delta = max(0, after_saved - before_saved)
+
 		# 处理None的情况
 		if not output_raw:
 			logger.warning(f"[{site_name}] Agent未返回有效输出")
-			return 0
+			return actual_delta
 
 		# 解析JSON
 		result_data = parse_item_from_output(output_raw)
@@ -437,17 +496,23 @@ async def process_all_page_items(
 		if result_data:
 			saved_count = result_data.get('saved_count', 0)
 			titles = result_data.get('titles', [])
-			logger.info(f"[{site_name}] 第 {page_num} 页处理完成，保存了 {saved_count} 个条目")
+			if saved_count != actual_delta:
+				logger.warning(
+					f"[{site_name}] ⚠️ 第 {page_num} 页 saved_count 不一致：Agent={saved_count}，实际新增文件={actual_delta}（已以实际新增文件为准）"
+				)
+			logger.info(f"[{site_name}] 第 {page_num} 页处理完成，新增保存 {actual_delta} 个条目")
 			for title in titles:
 				logger.info(f"  - {title[:50]}...")
-			return saved_count
+			return actual_delta
 		else:
 			logger.info(f"[{site_name}] 第 {page_num} 页没有匹配条目")
-			return 0
+			return actual_delta
 
 	except Exception as e:
 		logger.error(f"[{site_name}] 第 {page_num} 页处理失败: {e}")
-		return 0
+		# 失败也尽量返回本次实际新增保存数
+		after_saved = count_saved_files(output_dir)
+		return max(0, after_saved - before_saved) if "before_saved" in locals() else 0
 
 
 async def find_and_click_next_item(
