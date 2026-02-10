@@ -142,12 +142,22 @@ def _parse_money_to_yuan_decimal(v: Any) -> Optional[tuple[Decimal, int]]:
 	s = str(v).strip()
 	if not s:
 		return None
-	s = s.replace(",", "").replace("，", "")
-	s = s.replace("人民币", "").replace("￥", "").replace("¥", "")
 
-	# 范围值不应进入 number 字段
+	# 范围/多值保护：number 字段只允许单一金额。
+	# e.g. "1~2万" / "100-200" / "97.00,98.50" 都应视为无效并返回 None。
 	if "~" in s or "～" in s or "-" in s:
 		return None
+
+	# 先在“未去逗号”的文本上判断是否存在多个金额数字，避免把 "97.00,98.50" 错误合并成一个数。
+	# 注意：千分位写法如 "97,000" 只应识别为一个数字。
+	s_num_check = s.replace("，", ",")
+	num_tokens = re.findall(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?", s_num_check)
+	if len(num_tokens) > 1:
+		return None
+
+	# 统一去掉货币符号/千分位逗号（此时已经确认最多只有一个数字 token）。
+	s = s.replace(",", "").replace("，", "")
+	s = s.replace("人民币", "").replace("￥", "").replace("¥", "")
 
 	multiplier = Decimal(1)
 	if "亿" in s:
@@ -211,7 +221,9 @@ def normalize_estimated_amount(v: Any) -> str:
 	s = s.replace("～", "~")
 	parts = [p.strip() for p in s.split("~") if p.strip()]
 	if len(parts) != 2:
-		return s
+		# Allow single amount (e.g. "100万") and normalize it to yuan string when possible.
+		single = _to_yuan_str(s)
+		return single if single is not None else s
 
 	lo = _to_yuan_str(parts[0])
 	hi = _to_yuan_str(parts[1])
@@ -375,7 +387,7 @@ class LotProduct(BaseModel):
 	subjects: str = Field(default="", validation_alias=AliasChoices("subjects", "标的物"))
 	productCategory: str = Field(default="", validation_alias=AliasChoices("productCategory", "二级产品"))
 	models: str = Field(default="", validation_alias=AliasChoices("models", "标的物型号", "型号"))
-	unitPrices: str = Field(default="", validation_alias=AliasChoices("unitPrices", "标的物单价", "单价"))
+	unitPrices: float | None = Field(default=None, validation_alias=AliasChoices("unitPrices", "标的物单价", "单价"))
 	quantities: str = Field(default="", validation_alias=AliasChoices("quantities", "标的物数量", "数量"))
 	quantityUnit: str = Field(default="", validation_alias=AliasChoices("quantityUnit", "quantity_unit", "数量单位", "单位"))
 
@@ -422,9 +434,17 @@ class LotProduct(BaseModel):
 
 	@field_validator("unitPrices", mode="before")
 	@classmethod
-	def _unit_prices(cls, v: Any) -> str:
-		parts = _normalize_price_list(v)
-		return parts[0] if parts else ""
+	def _unit_prices(cls, v: Any) -> float | None:
+		# Money fields are floats in yuan; invalid inputs become None.
+		if v is None:
+			return None
+		if isinstance(v, list):
+			for x in v:
+				val = _to_yuan(x)
+				if val is not None:
+					return val
+			return None
+		return _to_yuan(v)
 
 	@field_validator("quantities", mode="before")
 	@classmethod
@@ -464,12 +484,57 @@ class LotProducts(RootModel[list[LotProduct]]):
 					return []
 			return []
 
-		def _pick(parts: list[str], idx: int) -> str:
+		def _pick(parts: list[Any], idx: int, default: Any = "") -> Any:
 			if not parts:
-				return ""
+				return default
 			if len(parts) == 1:
 				return parts[0]
-			return parts[idx] if idx < len(parts) else ""
+			return parts[idx] if idx < len(parts) else default
+
+		def _money_list(raw: Any) -> list[float | None]:
+			"""
+			Parse a list of money values (yuan) from common LLM outputs.
+			- Returns list[float|None]; invalid values become None.
+			- Supports thousand separators and 万/亿 units.
+			"""
+			if raw is None:
+				return []
+			if isinstance(raw, list):
+				return [_to_yuan(x) for x in raw]
+			if isinstance(raw, (int, float, Decimal)):
+				val = _to_yuan(raw)
+				return [val] if val is not None else []
+			if isinstance(raw, dict):
+				# unexpected shape; treat as empty to avoid inventing data
+				return []
+			if isinstance(raw, str):
+				s = raw.strip()
+				if not s or s.lower() in _EMPTY_STRINGS:
+					return []
+				# stringified JSON array
+				if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
+					try:
+						parsed = json.loads(s)
+						return _money_list(parsed)
+					except Exception:
+						pass
+
+				# single amount (strict)
+				single = _to_yuan(s)
+				if single is not None:
+					return [single]
+
+				# multi-value fallback: extract numeric tokens (support 万/亿)
+				s2 = s.replace("，", ",")
+				out: list[float | None] = []
+				for m in re.finditer(r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s*(亿|万))?", s2):
+					token = m.group(1) + (m.group(2) or "")
+					out.append(_to_yuan(token))
+				return out
+
+			# fallback
+			val = _to_yuan(raw)
+			return [val] if val is not None else []
 
 		items = _as_list(v)
 		out: list[dict] = []
@@ -483,7 +548,7 @@ class LotProducts(RootModel[list[LotProduct]]):
 				subjects = [desc] if desc else []
 			product_categories = _to_str_list(item.get("productCategory"))
 			models = _to_str_list(item.get("models"))
-			unit_prices = _normalize_price_list(item.get("unitPrices"))
+			unit_prices = _money_list(item.get("unitPrices"))
 			quantities = _to_str_list(item.get("quantities"))
 			quantity_units = _to_str_list(
 				item.get("quantityUnit") or item.get("quantity_unit") or item.get("数量单位") or item.get("单位")
@@ -517,7 +582,7 @@ class LotProducts(RootModel[list[LotProduct]]):
 						"subjects": subject_value,
 						"productCategory": product_category_value,
 						"models": _pick(models, idx),
-						"unitPrices": _pick(unit_prices, idx),
+						"unitPrices": _pick(unit_prices, idx, None),
 						"quantities": _pick(quantities, idx),
 						"quantityUnit": _pick(quantity_units, idx),
 					}
@@ -537,7 +602,7 @@ class LotCandidate(BaseModel):
 	lotName: str = Field(default="", validation_alias=AliasChoices("lotName", "标段名", "lot_name"))
 	type: str = Field(default="", validation_alias=AliasChoices("type", "类型", "候选类型", "中标类型"))
 	candidates: str = Field(default="", validation_alias=AliasChoices("candidates", "候选单位"))
-	candidatePrices: str = Field(default="", validation_alias=AliasChoices("candidatePrices", "候选单位报价", "报价"))
+	candidatePrices: float | None = Field(default=None, validation_alias=AliasChoices("candidatePrices", "候选单位报价", "报价"))
 
 	@field_validator("lotNumber", mode="before")
 	@classmethod
@@ -570,9 +635,17 @@ class LotCandidate(BaseModel):
 
 	@field_validator("candidatePrices", mode="before")
 	@classmethod
-	def _candidate_prices(cls, v: Any) -> str:
-		parts = _normalize_price_list(v)
-		return parts[0] if parts else ""
+	def _candidate_prices(cls, v: Any) -> float | None:
+		# Money fields are floats in yuan; invalid inputs become None.
+		if v is None:
+			return None
+		if isinstance(v, list):
+			for x in v:
+				val = _to_yuan(x)
+				if val is not None:
+					return val
+			return None
+		return _to_yuan(v)
 
 	@field_validator("candidates", mode="before")
 	@classmethod
@@ -603,12 +676,52 @@ class LotCandidates(RootModel[list[LotCandidate]]):
 					return []
 			return []
 
-		def _pick(parts: list[str], idx: int) -> str:
+		def _pick(parts: list[Any], idx: int, default: Any = "") -> Any:
 			if not parts:
-				return ""
+				return default
 			if len(parts) == 1:
 				return parts[0]
-			return parts[idx] if idx < len(parts) else ""
+			return parts[idx] if idx < len(parts) else default
+
+		def _money_list(raw: Any) -> list[float | None]:
+			"""
+			Parse a list of money values (yuan) from common LLM outputs.
+			- Returns list[float|None]; invalid values become None.
+			- Supports thousand separators and 万/亿 units.
+			"""
+			if raw is None:
+				return []
+			if isinstance(raw, list):
+				return [_to_yuan(x) for x in raw]
+			if isinstance(raw, (int, float, Decimal)):
+				val = _to_yuan(raw)
+				return [val] if val is not None else []
+			if isinstance(raw, dict):
+				return []
+			if isinstance(raw, str):
+				s = raw.strip()
+				if not s or s.lower() in _EMPTY_STRINGS:
+					return []
+				if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
+					try:
+						parsed = json.loads(s)
+						return _money_list(parsed)
+					except Exception:
+						pass
+
+				single = _to_yuan(s)
+				if single is not None:
+					return [single]
+
+				s2 = s.replace("，", ",")
+				out: list[float | None] = []
+				for m in re.finditer(r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s*(亿|万))?", s2):
+					token = m.group(1) + (m.group(2) or "")
+					out.append(_to_yuan(token))
+				return out
+
+			val = _to_yuan(raw)
+			return [val] if val is not None else []
 
 		items = _as_list(v)
 		out: list[dict] = []
@@ -619,13 +732,13 @@ class LotCandidates(RootModel[list[LotCandidate]]):
 
 			# Backward compatibility: old schema fields (winner/winningAmount) may still appear.
 			winner = _join_list(item.get("winner"))
-			winning_amount_text = _to_yuan_str(item.get("winningAmount"))
+			winning_amount = _to_yuan(item.get("winningAmount"))
 
 			candidates = _to_str_list(item.get("candidates"))
-			candidate_prices = _normalize_price_list(item.get("candidatePrices"))
+			candidate_prices = _money_list(item.get("candidatePrices"))
 
 			row_count = max(len(candidates), len(candidate_prices))
-			keep_one = row_count > 0 or bool(winner) or bool(winning_amount_text)
+			keep_one = row_count > 0 or bool(winner) or (winning_amount is not None)
 			if not keep_one:
 				continue
 
@@ -633,10 +746,7 @@ class LotCandidates(RootModel[list[LotCandidate]]):
 			# Convert that into one row (no guessing beyond extracted fields).
 			if row_count <= 0 and winner:
 				candidates = [winner]
-				if winning_amount_text is not None:
-					candidate_prices = [winning_amount_text]
-				else:
-					candidate_prices = [""]
+				candidate_prices = [winning_amount] if winning_amount is not None else [None]
 				row_count = 1
 			if row_count <= 0:
 				row_count = 1
@@ -654,7 +764,7 @@ class LotCandidates(RootModel[list[LotCandidate]]):
 						"lotName": lot_name,
 						"type": type_value,
 						"candidates": candidate_value,
-						"candidatePrices": _pick(candidate_prices, idx),
+						"candidatePrices": _pick(candidate_prices, idx, None),
 					}
 				)
 		return out

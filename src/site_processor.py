@@ -276,7 +276,8 @@ async def process_site(
 	max_retries: int = 3,
 	on_item_saved=None,
 	date_start: str | None = None,
-	date_end: str | None = None
+	date_end: str | None = None,
+	engineering_machinery_only: bool = False,
 ) -> Dict:
 	"""
 	处理单个网站
@@ -473,7 +474,8 @@ async def process_site(
 				max_pages=max_pages,
 				on_item_saved=on_item_saved,
 				date_start=date_start,
-				date_end=date_end
+				date_end=date_end,
+				engineering_machinery_only=engineering_machinery_only,
 			)
 			total_items = result.get("items_found", 0)
 			pages_processed = result.get("pages_processed", 0)

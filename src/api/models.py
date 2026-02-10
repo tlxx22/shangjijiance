@@ -27,6 +27,10 @@ class CrawlRequest(BaseModel):
     date_start: date
     date_end: date
     category: constr(min_length=1)
+    engineering_machinery_only: bool = Field(
+        default=True,
+        description="是否仅保留工程机械类公告（在详情页 flat 提取后基于 projectName 再做一次 LLM 判定；不符合则跳过不落盘/不返回 SSE item）",
+    )
     timeout_seconds: int = 1800  # 30分钟
     max_pages: int = 3
     headless: bool = True

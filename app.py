@@ -175,6 +175,7 @@ async def crawl(request: CrawlRequest, http_request: Request):
                     headless=request.headless,
                     date_start=str(request.date_start),
                     date_end=str(request.date_end),
+                    engineering_machinery_only=request.engineering_machinery_only,
                 )
                 async for chunk in event_generator(
                     session=session,

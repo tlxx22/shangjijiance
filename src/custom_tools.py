@@ -474,6 +474,7 @@ import hashlib
 import json
 import yaml
 from dataclasses import dataclass
+from decimal import Decimal
 from datetime import datetime
 from pydantic import BaseModel, Field
 from browser_use import Agent
@@ -1113,6 +1114,11 @@ No markdown, no code fences, no extra text.
 
 Rules:
 - Fill missing fields with the correct empty value by type (string=\"\", number=null, array=[]).
+- Special rule for estimatedAmount:
+  - If announcementType is 招标 or 候选, you MUST output a non-empty amount estimate (yuan) as either \"number\" or \"lo~hi\".
+  - The estimate MUST be derived mainly from the procurement items (标的物), quantities, specs, service scope, and similar signals.
+    Do NOT use irrelevant fees (e.g. document price, service fee, deposit, CA/platform fees) as the estimate.
+  - If announcementType is NOT 招标/候选, you MUST output empty string for estimatedAmount.
 - Money amounts are in 单位“元” (convert 万/亿 to 元 if needed).
 - Dates are YYYY-MM-DD.
 """.strip()
@@ -1132,6 +1138,160 @@ Rules:
 		return empty_result
 
 	return _parse_extracted_fields_output(output, site_name=site_name, stage=stage, fields=fields)
+
+
+_ENGINEERING_MACHINERY_CLASSIFY_SYSTEM_PROMPT = """
+You are a strict binary classifier.
+Given a Chinese tender/notice 项目名称 (projectName) and optionally the 公告标题 (announcementTitle),
+decide whether the project is related to 工程机械类 (engineering / construction machinery).
+
+INCLUDE (examples, not exhaustive):
+- Construction machinery /工程机械 equipment and related spare parts/services:
+  挖掘机/装载机/推土机/压路机/摊铺机/铣刨机/平地机/履带式设备/工程车辆/矿卡/非公路矿用自卸车
+- Lifting/hoisting machinery commonly considered engineering machinery:
+  起重机/吊车/塔吊/履带吊/汽车吊/门式起重机/桥式起重机/架桥机
+- Foundation/drilling/tunneling machinery:
+  旋挖钻/钻机/打桩机/盾构/盾构机/TBM/隧道掘进机
+- Concrete machinery:
+  混凝土泵/泵车/搅拌站/拌合站/搅拌车
+- Aerial work platforms and similar heavy equipment.
+- The above equipment's 配件/备件/维修/保养/租赁/改造 that clearly targets such machinery.
+
+EXCLUDE (examples):
+- Pure civil works/施工 without a clear machinery procurement/service focus.
+- General materials (钢材/食材/办公用品), IT/software, property/catering services, etc.
+- Generic electrical equipment (电机/水泵/配电柜) unless clearly a part of engineering machinery.
+
+Decision rule:
+- If projectName clearly indicates engineering machinery: return true.
+- If clearly unrelated: return false.
+- If uncertain/too generic: return true (prefer keep to avoid false negatives).
+
+Return ONLY valid JSON. No markdown, no code fences, no extra text.
+Schema:
+{"isEngineeringMachinery": true, "confidence": "high|medium|low", "reason": "short Chinese reason"}
+""".strip()
+
+
+def _parse_engineering_machinery_classifier_output(output: Any, *, site_name: str) -> tuple[bool | None, str]:
+	"""
+	Tolerantly parse LLM output for the engineering machinery classifier.
+
+	Returns: (decision, reason)
+	- decision is True/False when parsed, None when unknown/unparseable (callers should default to keep).
+	"""
+	if not output:
+		return None, "empty_output"
+
+	output_str = str(output).strip()
+
+	# Handle escaped quotes (LLM sometimes returns \\\" instead of \")
+	if '\\"' in output_str:
+		output_str = output_str.replace('\\"', '"')
+
+	# Remove possible markdown fences.
+	output_str = re.sub(r'^```json\\s*', '', output_str)
+	output_str = re.sub(r'^```\\s*', '', output_str)
+	output_str = re.sub(r'\\s*```$', '', output_str)
+
+	# Extract JSON snippet.
+	obj_start = output_str.find('{')
+	obj_end = output_str.rfind('}')
+	if obj_start != -1 and obj_end > obj_start:
+		snippet = output_str[obj_start:obj_end + 1]
+	else:
+		snippet = output_str
+
+	# Remove trailing commas.
+	snippet = re.sub(r',(\s*[}\]])', r'\1', snippet)
+	snippet = _unescape_control_chars_outside_strings(snippet)
+
+	try:
+		parsed = json.loads(snippet)
+	except json.JSONDecodeError:
+		try:
+			parsed = yaml.safe_load(snippet)
+		except Exception as e:
+			logger.debug(f"[{site_name}] classifier JSON parse failed: {e}")
+			return None, f"unparseable: {output_str[:200]}"
+
+	# Accept plain boolean.
+	if isinstance(parsed, bool):
+		return parsed, ""
+
+	if not isinstance(parsed, dict):
+		low = output_str.strip().lower()
+		if low in {"true", "false"}:
+			return low == "true", ""
+		return None, f"unexpected_type={type(parsed).__name__}"
+
+	val = parsed.get("isEngineeringMachinery")
+	if val is None:
+		val = (
+			parsed.get("is_engineering_machinery")
+			or parsed.get("isGongchengjixie")
+			or parsed.get("is_gongchengjixie")
+		)
+
+	reason = str(parsed.get("reason") or parsed.get("rationale") or parsed.get("explain") or "").strip()
+	conf = str(parsed.get("confidence") or "").strip()
+	if conf:
+		reason = f"{conf}: {reason}".strip(": ").strip()
+	if len(reason) > 200:
+		reason = reason[:200]
+
+	if isinstance(val, bool):
+		return val, reason
+
+	if isinstance(val, str):
+		v = val.strip().lower()
+		if v in {"true", "1", "yes", "y", "是", "相关", "属于"}:
+			return True, reason
+		if v in {"false", "0", "no", "n", "否", "不相关", "不属于"}:
+			return False, reason
+
+	# Fallback: unknown -> keep.
+	return None, reason or f"missing_bool_field: {output_str[:200]}"
+
+
+async def llm_is_engineering_machinery_project(
+	project_name: str,
+	*,
+	title: str | None,
+	site_name: str,
+) -> tuple[bool | None, str]:
+	"""
+	LLM-based category judgement for 项目名称.
+
+	Returns: (decision, reason)
+	- decision=True: keep (工程机械类)
+	- decision=False: skip (非工程机械类)
+	- decision=None: unknown (callers should keep to avoid accidental data loss)
+	"""
+	project_name = (project_name or "").strip()
+	title = (title or "").strip()
+	if not project_name:
+		return None, "empty_projectName"
+
+	user_prompt = f"""projectName: {project_name}
+announcementTitle: {title}""".strip()
+
+	try:
+		output = await asyncio.to_thread(
+			chat_completion,
+			[
+				{"role": "system", "content": _ENGINEERING_MACHINERY_CLASSIFY_SYSTEM_PROMPT},
+				{"role": "user", "content": user_prompt},
+			],
+		)
+	except Exception as e:
+		logger.warning(f"[{site_name}] 工程机械类判定 LLM 调用失败: {e}")
+		return None, f"llm_error: {e}"
+
+	return _parse_engineering_machinery_classifier_output(output, site_name=site_name)
+
+
+_ESTIMATED_AMOUNT_VALUE_RE = re.compile(r"^\d+(?:\.\d+)?(?:~\d+(?:\.\d+)?)?$")
 
 
 def normalize_field_value(key: str, value: Any, field_type: str):
@@ -1550,6 +1710,7 @@ def create_save_detail_tools(
 	*,
 	list_tab_target_id: str | None = None,
 	list_url: str | None = None,
+	engineering_machinery_only: bool = False,
 ) -> Tools:
 	"""
 	创建包含 save_detail action 的 Tools 实例
@@ -1561,6 +1722,7 @@ def create_save_detail_tools(
 		on_item_saved: 可选回调函数，保存成功时调用 on_item_saved(json_data)
 		list_tab_target_id: 列表页 tab 的 target_id（full id）；用于在保存后自动回收多余标签并回到列表页
 		list_url: 列表页 URL（可选）；用于同标签打开详情时 go_back 的兜底校验/回退
+		engineering_machinery_only: 是否在详情页落盘前，基于 DeepSeek 提取到的 projectName 做“工程机械类”二次筛选；不属于则直接跳过（不保存/不返回 SSE item）
 
 	Returns:
 		配置好的 Tools 实例
@@ -1571,6 +1733,7 @@ def create_save_detail_tools(
 	# 而是在提示词里明确禁止使用 file tools 作为业务输出。
 	tools = Tools()
 	seen_detail_keys: set[str] = set()
+	_engineering_machinery_only = bool(engineering_machinery_only)
 	# 列表页 tab（用于保存后自动关闭详情页并切回列表页）
 	_locked_list_target_id: str | None = list_tab_target_id
 	_locked_list_url: str | None = (list_url or "").strip() or None
@@ -1758,11 +1921,16 @@ def create_save_detail_tools(
 
 			if dedup_key in seen_detail_keys:
 				logger.info(f"[{site_name}] ↩︎ 重复公告已跳过: {title[:40]}... ({dedup_key[:80]})")
+				# 仍需回到列表页并回收多余 tab，避免 Agent 后续在详情页继续点 index 导致混乱
+				with contextlib.suppress(Exception):
+					await _return_to_list_after_save(browser_session, current_url=str(detail_url or ""))
 				return ActionResult(
 					extracted_content="skipped_duplicate",
 					long_term_memory=f"重复公告已跳过: {title[:30]}..."
 				)
-			seen_detail_keys.add(dedup_key)
+			# 注意：不要在这里把 dedup_key 记入 seen_detail_keys。
+			# 原因：save_detail 可能失败或被要求“重试 1 次”（全局规则），
+			# 若提前记入会导致后续重试直接被当作 duplicate 跳过，造成漏抓。
 
 			# 3. 尝试点击"查看完整信息"按钮（展开脱敏内容）
 			await click_show_full_info(browser_session)
@@ -1783,8 +1951,39 @@ def create_save_detail_tools(
 			# 字段提取改用 DeepSeek-V3.2：将详情页正文 HTML 作为整体输入，让模型一次性解析输出字段 JSON
 			# 仅替换“字段提取”步骤；页面操作/导航仍然由 browser-use Agent 完成。
 			flat_fields = await extract_fields_from_html(announcement_content, site_name=site_name, stage="flat")
-			lot_fields = await extract_fields_from_html(announcement_content, site_name=site_name, stage="lots")
 			flat_fields.pop("updateDate", None)
+
+			# 5.1 工程机械类二次筛选（基于 flat 提取到的 projectName）
+			# 说明：此处只做“是否属于工程机械类”的判定，不做任何字段抽取；抽取仍然由 extract_fields_from_html 完成。
+			if _engineering_machinery_only:
+				project_name = str(flat_fields.get("projectName") or "").strip()
+				if project_name:
+					decision, reason = await llm_is_engineering_machinery_project(
+						project_name,
+						title=title,
+						site_name=site_name,
+					)
+					if decision is False:
+						# 明确判定为“非工程机械类”且本次开启了工程机械筛选：视为已处理，避免后续重复消耗。
+						seen_detail_keys.add(dedup_key)
+						logger.info(
+							f"[{site_name}] ↩︎ 工程机械类筛选已跳过: {title[:40]}... "
+							f"(projectName={project_name[:60]!r})"
+							+ (f" reason={reason}" if reason else "")
+						)
+						# Skip means: do NOT save JSON, do NOT emit SSE item; but must return to list & clean tabs.
+						await _return_to_list_after_save(browser_session, current_url=str(detail_url or ""))
+						return ActionResult(
+							extracted_content="skipped_non_gongchengjixie",
+							long_term_memory=f"跳过（非工程机械类）: {title[:30]}...",
+						)
+					if decision is None:
+						logger.warning(
+							f"[{site_name}] 工程机械类判定无结果，默认保留: {title[:40]}... "
+							+ (f" reason={reason}" if reason else "")
+						)
+
+			lot_fields = await extract_fields_from_html(announcement_content, site_name=site_name, stage="lots")
 
 			# 兜底：确保数组字段存在
 			lot_products = lot_fields.get("lotProducts") or []
@@ -1818,6 +2017,21 @@ def create_save_detail_tools(
 			# 公告类别归一化（13 选 1）
 			result_data["announcementType"] = normalize_announcement_type(result_data.get("announcementType"))
 
+			# estimatedAmount：仅当公告类型为【招标/候选】时才保留（由抽取阶段 DeepSeek 结合全文生成）。
+			# 本阶段只做：类型 gating + 正则校验（不做任何兜底/推导/再调用）。
+			try:
+				atype = (result_data.get("announcementType") or "").strip()
+				if atype not in {"招标", "候选"}:
+					result_data["estimatedAmount"] = ""
+				else:
+					est_text = str(result_data.get("estimatedAmount") or "").strip()
+					normalized = normalize_estimated_amount(est_text) if est_text else ""
+					if normalized and not _ESTIMATED_AMOUNT_VALUE_RE.match(normalized):
+						normalized = ""
+					result_data["estimatedAmount"] = normalized
+			except Exception as est_err:
+				logger.warning(f"[{site_name}] estimatedAmount 处理失败（已跳过）: {est_err}")
+
 			# 地址字段：不再用正则拆分；改为一次调用 LLM 从三组 AddressDetail 提取 12 个字段。
 			# 规则：
 			# - AddressDetail 为空：country="中国"，省市区为空字符串
@@ -1840,6 +2054,9 @@ def create_save_detail_tools(
 			json_path = output_dir / f"{filename}.json"
 			with open(json_path, 'w', encoding='utf-8') as f:
 				json.dump(result_data, f, ensure_ascii=False, indent=2)
+
+			# 保存成功后再记入 dedup 集合：避免失败场景阻断重试
+			seen_detail_keys.add(dedup_key)
 
 			logger.info(f"[{site_name}] ✓ 元数据已保存: {json_path.name}")
 

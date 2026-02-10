@@ -40,6 +40,7 @@ class CrawlSession:
         headless: bool = True,
         date_start: str | None = None,
         date_end: str | None = None,
+        engineering_machinery_only: bool = False,
     ):
         """
         启动后台爬虫任务
@@ -51,7 +52,16 @@ class CrawlSession:
         self._started = True
         
         self._task = asyncio.create_task(
-            self._run(site_config, filter_prompt, request_id, max_pages, headless, date_start, date_end)
+            self._run(
+                site_config,
+                filter_prompt,
+                request_id,
+                max_pages,
+                headless,
+                date_start,
+                date_end,
+                engineering_machinery_only,
+            )
         )
 
     async def _run(
@@ -63,6 +73,7 @@ class CrawlSession:
         headless: bool,
         date_start: str | None,
         date_end: str | None,
+        engineering_machinery_only: bool,
     ):
         """
         后台爬虫任务，推送事件到队列
@@ -97,6 +108,7 @@ class CrawlSession:
                 on_item_saved=on_item_saved,
                 date_start=date_start,
                 date_end=date_end,
+                engineering_machinery_only=engineering_machinery_only,
             )
             
             # 根据结果发送 done 或 error

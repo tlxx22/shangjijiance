@@ -67,6 +67,7 @@ curl -X POST http://localhost:8000/crawl \
     "date_start": "2026-01-08",
     "date_end": "2026-01-09",
     "category": "fuwu",
+    "engineering_machinery_only": true,
     "max_pages": 3
   }'
 ```

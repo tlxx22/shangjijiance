@@ -19,10 +19,13 @@ logger = get_logger()
 
 
 class ProcessResult(BaseModel):
-	"""Agent 处理结果的结构化输出模型"""
-	saved_count: int = Field(description="保存的条目数量")
+	"""
+	Agent 处理结果的结构化输出模型。
+
+	注意：保存条目数/标题列表由后端基于 save_detail 实际落盘结果统计，
+	不要求（也不建议）由 LLM 自行计数，避免 skipped_* / duplicate 等导致误报。
+	"""
 	pages_processed: int = Field(description="处理的页数")
-	titles: List[str] = Field(default_factory=list, description="已保存的标题列表")
 	risk_control: bool = Field(default=False, description="是否触发风控")
 
 
@@ -105,7 +108,8 @@ async def process_entire_site(
 	max_items_per_page: int | None = None,
 	on_item_saved=None,
 	date_start: str | None = None,
-	date_end: str | None = None
+	date_end: str | None = None,
+	engineering_machinery_only: bool = False,
 ) -> Dict:
 	"""
 	单个 Agent 处理整个网站的所有页面
@@ -142,14 +146,45 @@ async def process_entire_site(
 	if list_tab_target_id:
 		logger.info(f"[{site_name}] 锁定列表页 TAB: {str(list_tab_target_id)[-4:]} ({list_url or ''})")
 
+	# 统计“本次运行”前输出目录已有文件数，用于兜底/对账
+	initial_saved_total = count_saved_files(output_dir)
+
+	# 以 save_detail 实际落盘回调为准统计“本次运行”保存结果（权威口径）
+	run_saved_count = 0
+	run_saved_titles: list[str] = []
+
+	def _on_item_saved_wrapped(json_data: dict):
+		nonlocal run_saved_count
+		run_saved_count += 1
+
+		title = (
+			json_data.get("announcementName")
+			or json_data.get("announcementTitle")
+			or json_data.get("projectName")
+			or ""
+		)
+		title = str(title).strip()
+		if title:
+			run_saved_titles.append(title)
+
+		if on_item_saved:
+			try:
+				ret = on_item_saved(json_data)
+				# 兼容 async 回调
+				if asyncio.iscoroutine(ret):
+					asyncio.create_task(ret)
+			except Exception as cb_err:
+				logger.warning(f"[{site_name}] on_item_saved 回调执行失败: {cb_err}")
+
 	# 创建自定义工具（传入 llm 用于字段提取，传入回调用于 SSE 输出）
 	tools = create_save_detail_tools(
 		output_dir,
 		site_name,
 		llm=llm,
-		on_item_saved=on_item_saved,
+		on_item_saved=_on_item_saved_wrapped,
 		list_tab_target_id=str(list_tab_target_id) if list_tab_target_id else None,
 		list_url=str(list_url) if list_url else None,
+		engineering_machinery_only=engineering_machinery_only,
 	)
 
 	# 日期筛选指令（使用 API 传入的日期，否则默认近2天）
@@ -163,6 +198,18 @@ async def process_entire_site(
 		start_date = yesterday.strftime('%Y-%m-%d')
 		end_date = today.strftime('%Y-%m-%d')
 
+	# 说明：初筛只按日期打开详情；是否“最终落盘保存”由 save_detail 在详情页阶段决定（可选工程机械类过滤）
+	if engineering_machinery_only:
+		post_filter_note = (
+			"- 本次任务开启“工程机械类”落盘筛选：列表页不要根据标题/领域（包括是否工程机械）来决定是否打开详情页；"
+			"只要日期符合，就必须 `open_and_save` 打开详情页。非工程机械类会在详情页阶段自动跳过"
+			"（`skipped_non_gongchengjixie`，不落盘），这是预期结果。"
+		)
+	else:
+		post_filter_note = (
+			"- 本次任务未开启工程机械类过滤：只要日期符合，就应 `open_and_save` 打开详情页并落盘保存。"
+		)
+
 	# 构建Agent任务（全局规则已通过 extend_system_message 注入）
 	task = f"""
 {filter_prompt}
@@ -172,18 +219,14 @@ async def process_entire_site(
 IMPORTANT:
 - Do NOT use `write_file` / `replace_file` / `read_file` (e.g., todo.md/results.md) as business output or progress tracking.
 - The ONLY valid way to save/output an announcement is to call `open_and_save` (preferred, from list page) or `save_detail` (only when already on the detail page).
+{post_filter_note}
 
 **【第一步：筛选操作】**
 
 在开始处理条目之前，请先进行以下筛选（如果页面有这些选项）：
-0. **锁定本次爬取的“总条数”快照（非常重要）**：
-   - 在任何点击条目/翻页之前，先从页面分页区域读取“共 X 条 / 共 X 页 / X results”之类的信息
-   - 将第一次读到的“总条数”记为 `LOCKED_TOTAL`，后续即使页面显示总数变成更大（网站实时更新导致），也必须忽略，继续以 `LOCKED_TOTAL` 为准
-   - **去重计数**：如果你发现某条公告在后续页又出现了（例如同标题同日期），这属于“列表被新公告顶下来导致的重复”，不要算入已处理数量；继续往下找新的条目
-   - 你最终必须在“已处理的唯一条目数（按 标题+日期 去重）达到 LOCKED_TOTAL”后用 `done` 结束任务，避免因为列表实时更新而永远处理不完
 1. **业务类型**：点击"不限"
 2. **信息类型**：点击"不限"（获取所有类型的公告）
-   - 如果页面上是“公告类型：”这种横向 Tab（例如：全部/招标预告/招标公告/…），必须点击“全部”（等价于“不限”），不要停留在某一个具体类型上。
+    - 如果页面上是“公告类型：”这种横向 Tab（例如：全部/招标预告/招标公告/…），必须点击“全部”（等价于“不限”），不要停留在某一个具体类型上。
 3. **日期筛选**（需判断筛选字段类型）：
    - **首先观察**筛选控件的标签：是"发布日期"还是"截止日期/开标时间"？
    - **如果是"发布日期"类筛选**：
@@ -202,7 +245,7 @@ IMPORTANT:
 
 **【第二步：处理所有页面的条目】**
 
-你需要处理 **最多 {max_pages} 页** 的招标条目，但如果你已处理条目数（含跳过）达到 `LOCKED_TOTAL`，必须立即 `done` 结束任务。
+你需要处理 **最多 {max_pages} 页** 的招标条目；达到页数上限或没有更多页面时，用 `done` 结束任务。
 
 **对于每一页，重复以下流程：**
 
@@ -225,13 +268,26 @@ IMPORTANT:
 
 **【返回格式】**
 
-处理完成后用 done 返回 JSON：
+处理完成后调用 `done` 结束任务，并返回结构化结果。
+
+⚠️ 本任务启用了结构化输出（你会在任务末尾看到 `Expected output format: ProcessResult`），因此 `done` 的参数必须包含：
+- `success`: true/false（默认 true）
+- `data`: **这里面**才是最终输出（必须符合 ProcessResult schema）
+
+示例（正常完成）：
 ```json
-{{"saved_count": N, "pages_processed": M, "titles": ["标题1", "标题2", ...]}}
+{{"done": {{"success": true, "data": {{"pages_processed": 2, "risk_control": false}}}}}}
 ```
-- N: 保存的条目总数
-- M: 处理的页数
-- titles: 已保存的标题列表
+
+示例（触发风控/反爬，必须立刻停止）：
+```json
+{{"done": {{"success": true, "data": {{"pages_processed": 1, "risk_control": true}}}}}}
+```
+
+说明：
+- `pages_processed`: 你实际处理/翻过的页数（含第一页）
+- `risk_control`: 是否触发风控/反爬（见全局规则）
+- 保存条目数量由系统根据 `save_detail` 实际落盘统计，你**不要**自行计数（避免 skipped_* / duplicate 导致误报）
 """
 
 	try:
@@ -258,29 +314,27 @@ IMPORTANT:
 		# 保存分析日志到txt文件
 		save_analysis_log(result, output_dir, site_name)
 
-		# 统计实际保存的文件数（兜底）
-		actual_saved = count_saved_files(output_dir)
+		# 统计落盘文件数：总数 + 本次增量（兜底）
+		saved_total_end = count_saved_files(output_dir)
+		saved_delta = max(saved_total_end - initial_saved_total, 0)
+		final_count = max(run_saved_count, saved_delta)
+		if run_saved_count != saved_delta:
+			logger.warning(
+				f"[{site_name}] ⚠️ 保存条目计数不一致：callback={run_saved_count}，文件增量={saved_delta}（以较大者为准）"
+			)
 
 		# 优先使用结构化输出
 		if result.structured_output:
 			structured = result.structured_output
-			saved_count = structured.saved_count
 			pages_processed = structured.pages_processed
-			titles = structured.titles
 			risk_control = structured.risk_control
-			# 以实际落盘文件数为准（Agent 可能会“自增” saved_count 但未真正调用 save_detail）
-			final_count = actual_saved
-			if saved_count != actual_saved:
-				logger.warning(
-					f"[{site_name}] ⚠️ saved_count 不一致：Agent={saved_count}，实际文件={actual_saved}（已以实际文件为准）"
-				)
 
 			if risk_control:
 				logger.warning(f"[{site_name}] ⚠️ 检测到风控，已处理 {pages_processed} 页，保存 {final_count} 条")
 			else:
 				logger.info(f"[{site_name}] 处理完成：{pages_processed} 页，保存 {final_count} 条（结构化输出）")
 
-			for title in titles:
+			for title in run_saved_titles:
 				logger.info(f"  - {title[:50]}...")
 			return {"items_found": final_count, "pages_processed": pages_processed, "risk_control": risk_control}
 
@@ -293,45 +347,40 @@ IMPORTANT:
 				if result_data.get('risk_control'):
 					logger.warning(f"[{site_name}] ⚠️ 检测到风控/反爬机制，停止处理")
 					return {
-						"items_found": actual_saved,
+						"items_found": final_count,
 						"pages_processed": result_data.get('pages_processed', 1),
 						"risk_control": True
 					}
-				saved_count = result_data.get('saved_count', 0)
 				pages_processed = result_data.get('pages_processed', 1)
-				titles = result_data.get('titles', [])
 				risk_control = result_data.get('risk_control', False)
-				final_count = actual_saved
-				if saved_count != actual_saved:
-					logger.warning(
-						f"[{site_name}] ⚠️ saved_count 不一致：Agent={saved_count}，实际文件={actual_saved}（已以实际文件为准）"
-					)
 
 				if risk_control:
 					logger.warning(f"[{site_name}] ⚠️ 检测到风控，已处理 {pages_processed} 页，保存 {final_count} 条")
 				else:
 					logger.info(f"[{site_name}] 处理完成：{pages_processed} 页，保存 {final_count} 条（JSON解析）")
 
-				for title in titles:
+				for title in run_saved_titles:
 					logger.info(f"  - {title[:50]}...")
 				return {"items_found": final_count, "pages_processed": pages_processed, "risk_control": risk_control}
 
 		# 都失败了，用文件计数兜底
-		if actual_saved > 0:
-			logger.info(f"[{site_name}] 解析失败，但实际保存了 {actual_saved} 个文件")
+		if final_count > 0:
+			logger.info(f"[{site_name}] 解析失败，但实际保存了 {final_count} 条（以落盘/回调统计为准）")
 		else:
 			logger.info(f"[{site_name}] 没有匹配条目")
-		return {"items_found": actual_saved, "pages_processed": 1, "risk_control": False}
+		return {"items_found": final_count, "pages_processed": 1, "risk_control": False}
 
 	except BudgetExceededError:
 		raise
 	except Exception as e:
 		logger.error(f"[{site_name}] 处理失败: {e}")
-		# 即使出错也统计已保存的文件
-		actual_saved = count_saved_files(output_dir)
-		if actual_saved > 0:
-			logger.info(f"[{site_name}] 虽然出错，但已保存 {actual_saved} 个文件")
-		return {"items_found": actual_saved, "pages_processed": 0, "risk_control": False}
+		# 即使出错也统计本次运行已保存的条目（兜底：文件增量）
+		saved_total_end = count_saved_files(output_dir)
+		saved_delta = max(saved_total_end - initial_saved_total, 0)
+		final_count = max(run_saved_count, saved_delta)
+		if final_count > 0:
+			logger.info(f"[{site_name}] 虽然出错，但已保存 {final_count} 条（以落盘/回调统计为准）")
+		return {"items_found": final_count, "pages_processed": 0, "risk_control": False}
 
 
 async def process_all_page_items(
@@ -456,11 +505,15 @@ async def process_all_page_items(
  - 一般不需要手动 `switch/close/go_back`；优先使用 `open_and_save`（已封装 tab 处理）
 
 	**返回格式（JSON）：**
+当前页面所有符合条件条目处理完后，调用 `done` 返回。
+
+⚠️ 本任务未启用结构化输出，因此 `done` 只接受 `text` 字段。请把最终 JSON **原样放进** `done.text`（只输出 JSON，不要额外文字）。
+
+`done.text` 内容示例：
 ```json
-{{"saved_count": N, "titles": ["标题1", "标题2", ...]}}
+{{"saved_count": N, "titles": ["标题1", "标题2", "..."]}}
 ```
-其中 N 是成功保存的条目数量，titles 是已保存的标题列表。
-如果没有符合条件的条目，返回：
+如果没有符合条件的条目：
 ```json
 {{"saved_count": 0, "titles": []}}
 ```

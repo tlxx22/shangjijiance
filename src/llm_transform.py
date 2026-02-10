@@ -8,7 +8,7 @@ from typing import Any
 from .extract_client import chat_completion
 from .config_manager import load_extract_fields, generate_extract_prompt
 from .custom_tools import extract_fields_from_html, normalize_field_value
-from .field_schemas import LotProducts, LotCandidates, normalize_announcement_type
+from .field_schemas import LotProducts, LotCandidates, normalize_announcement_type, normalize_estimated_amount
 
 
 def _strip_code_fences(text: str) -> str:
@@ -29,6 +29,7 @@ def _strip_code_fences(text: str) -> str:
 
 
 _MD_ESC_RE = re.compile(r"(?<!\\)\\([nrt])")
+_ESTIMATED_AMOUNT_VALUE_RE = re.compile(r"^\d+(?:\.\d+)?(?:~\d+(?:\.\d+)?)?$")
 
 
 def _unescape_md_control_sequences(text: str) -> str:
@@ -135,6 +136,11 @@ No markdown, no code fences, no extra text.
 Rules:
 - Treat the input as plain text; do not require it to be valid JSON.
 - Fill missing fields with the correct empty value by type (string=\"\", number=null, array=[], boolean=false).
+- Special rule for estimatedAmount:
+  - If announcementType is 招标 or 候选, you MUST output a non-empty amount estimate (yuan) as either \"number\" or \"lo~hi\".
+  - The estimate MUST be derived mainly from the procurement items (标的物), quantities, specs, service scope, and similar signals.
+    Do NOT use irrelevant fees (e.g. document price, service fee, deposit, CA/platform fees) as the estimate.
+  - If announcementType is NOT 招标/候选, you MUST output empty string for estimatedAmount.
 - Money amounts are in 单位“元” (convert 万/亿 to 元 if needed).
 - Dates are YYYY-MM-DD.
 """.strip()
@@ -228,4 +234,22 @@ async def normalize_source_json_to_item(source_json: str) -> dict[str, Any]:
 	merged["lotProducts"] = (lots_fields or {}).get("lotProducts") or []
 	merged["lotCandidates"] = (lots_fields or {}).get("lotCandidates") or []
 
-	return _normalize_item_to_crawler_schema(merged)
+	item = _normalize_item_to_crawler_schema(merged)
+
+	# estimatedAmount：仅当公告类型为【招标/候选】时才保留（由抽取阶段 DeepSeek 结合全文生成）。
+	# 本阶段只做：类型 gating + 正则校验（不做任何兜底/推导/再调用）。
+	try:
+		atype = (item.get("announcementType") or "").strip()
+		if atype not in {"招标", "候选"}:
+			item["estimatedAmount"] = ""
+		else:
+			est_text = str(item.get("estimatedAmount") or "").strip()
+			normalized = normalize_estimated_amount(est_text) if est_text else ""
+			if normalized and not _ESTIMATED_AMOUNT_VALUE_RE.match(normalized):
+				normalized = ""
+			item["estimatedAmount"] = normalized
+	except Exception:
+		# normalize_item should be best-effort; failures should not break the whole response.
+		pass
+
+	return item

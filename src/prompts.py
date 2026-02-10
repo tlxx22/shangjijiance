@@ -13,6 +13,7 @@ GLOBAL_RULES = """
 - To save/output an announcement you MUST go through our tools:
   - Preferred (from list page): call `open_and_save(index, title, date)` (it will click → handle new-tab/same-tab → call `save_detail` → return to list and clean tabs).
   - Only when you are already on a detail page: call `save_detail(title, date)` (this is the only action that triggers backend persistence + SSE item output).
+- Tools may return `skipped_*` (e.g. `skipped_non_gongchengjixie`, `skipped_duplicate`). This means the item was intentionally skipped and NOT saved. Do NOT count it as saved; just continue to the next item.
 - `write_file` / `replace_file` / `read_file` are NOT disabled, but do not call them unless explicitly asked for debugging; never use them as a substitute for `save_detail`.
 - Do not create or maintain `todo.md` / `results.md` as progress or deliverables. Those files are not consumed by the backend and do not count as saved items.
 - If you notice you are writing files instead of calling `open_and_save`/`save_detail`, stop writing files immediately and return to the main flow.
@@ -82,8 +83,10 @@ GLOBAL_RULES = """
 
 **如果检测到风控：**
 1. **立即停止**所有操作
-2. 用 done 返回 JSON，包含 `"risk_control": true`
-3. 示例：`{"saved_count": 2, "pages_processed": 1, "titles": [...], "risk_control": true}`
+2. 立刻调用 `done` 结束任务，并返回 `risk_control=true`
+   - 如果任务启用了结构化输出（你会看到 `Expected output format:`），把结果放在 `done.data` 中，例如：
+     `{"done": {"success": true, "data": {"pages_processed": 1, "risk_control": true}}}`
+   - 如果未启用结构化输出：把 JSON 文本放在 `done.text` 中（只输出 JSON，不要额外文字）
 
 **不要尝试：**
 - 刷新页面
