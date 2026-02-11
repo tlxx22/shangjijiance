@@ -204,6 +204,7 @@ async def process_entire_site(
 			"- 本次任务开启“工程机械类”落盘筛选：列表页不要根据标题/领域（包括是否工程机械）来决定是否打开详情页；"
 			"只要日期符合，就必须 `open_and_save` 打开详情页。非工程机械类会在详情页阶段自动跳过"
 			"（`skipped_non_gongchengjixie`，不落盘），这是预期结果。"
+			"即使多数条目会被跳过，也请继续优先按组（每步 3 条；上限 3 条/step）调用 `open_and_save` 提升效率。"
 		)
 	else:
 		post_filter_note = (
@@ -253,6 +254,7 @@ IMPORTANT:
 2. **提取信息**：记录标题和发布日期
 3. **原子化保存**：找到该条目标题链接对应的交互元素 index，调用 `open_and_save(index, title, date)`
    - `open_and_save` 会自动：点击打开详情页（处理新标签/同标签）→ 保存（内部调用 `save_detail`）→ 回到列表页并回收多余标签
+   - **效率（重要）**：为了减少步骤/预算：在页面稳定且本页待处理条目 ≥ 3 时，每个 step **优先连续调用 3 次** `open_and_save`（上限 3 次/step）。只有在刚发生 `detail_not_opened`/`element_not_found`、需要滚动/翻页、或页面不稳定时才改为单条执行。
    - 如果返回 `detail_not_opened`，说明点错了（常见：点到“进行中/已结束”状态列），请改用标题链接的 index 重试；不要直接处理下一条
 5. **继续处理**当前页面的下一个条目
 6. **当前页处理完后**，点击"下一页"翻到下一页
@@ -305,6 +307,7 @@ IMPORTANT:
 			output_model_schema=ProcessResult,
 			extend_system_message=GLOBAL_RULES,
 			max_failures=10,
+			max_actions_per_step=3,
 			step_timeout=600,
 		)
 
@@ -492,6 +495,7 @@ async def process_all_page_items(
  2. **记录信息**：提取该条目的【完整标题】和【发布日期】（格式 YYYY-MM-DD）
  3. **原子化保存**：找到该条目标题链接对应的交互元素 index，调用 `open_and_save(index, title, date)`
     - `open_and_save` 会自动：点击打开详情页（处理新标签/同标签）→ 保存（内部调用 `save_detail`）→ 回到列表页并回收多余标签
+    - **效率（重要）**：为了减少步骤/预算：在页面稳定且本页待处理条目 ≥ 3 时，每个 step **优先连续调用 3 次** `open_and_save`（上限 3 次/step）。只有在刚发生 `detail_not_opened`/`element_not_found`、需要滚动、或页面不稳定时才改为单条执行。
     - 如果返回 `detail_not_opened`，说明点错了（常见：点到“进行中/已结束”状态列），请改用标题链接的 index 重试；不要直接处理下一条
  4. **继续处理**：回到步骤1，寻找下一个符合条件的条目
 
@@ -528,6 +532,7 @@ async def process_all_page_items(
 			tools=tools,
 			extend_system_message=GLOBAL_RULES,
 			max_failures=10,
+			max_actions_per_step=3,
 			# open_and_save 已封装“点击→切换→保存→返回列表”，减少遗漏保存的概率
 			step_timeout=600,
 		)

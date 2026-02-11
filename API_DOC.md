@@ -46,7 +46,7 @@
   "date_start": "2026-01-01",
   "date_end": "2026-01-31",
   "category": "fuwu",
-  "engineering_machinery_only": true,
+  "engineering_machinery_only": false,
   "timeout_seconds": 1200,
   "max_pages": 3
 }
@@ -64,7 +64,7 @@
 | date_start | string | ✅ | 筛选开始日期，格式 YYYY-MM-DD |
 | date_end | string | ✅ | 筛选结束日期，格式 YYYY-MM-DD |
 | category | string | ✅ | 分类（对应 prompts/ 目录下的模板名） |
-| engineering_machinery_only | boolean | ❌ | 是否仅保留工程机械类公告（默认 true；在详情页基于 projectName 做二次判定，不符合则跳过不落盘/不返回 SSE item） |
+| engineering_machinery_only | boolean | ❌ | 是否仅保留工程机械类公告（默认 false；在详情页基于 projectName 做二次判定，不符合则跳过不落盘/不返回 SSE item） |
 | timeout_seconds | integer | ❌ | 超时时间（默认 1200s） |
 | max_pages | integer | ❌ | 最大翻页数（默认 3） |
 
