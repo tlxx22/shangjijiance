@@ -524,14 +524,6 @@ class LotProducts(RootModel[list[LotProduct]]):
 				if single is not None:
 					return [single]
 
-				# multi-value fallback: extract numeric tokens (support 万/亿)
-				s2 = s.replace("，", ",")
-				out: list[float | None] = []
-				for m in re.finditer(r"(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s*(亿|万))?", s2):
-					token = m.group(1) + (m.group(2) or "")
-					out.append(_to_yuan(token))
-				return out
-
 			# fallback
 			val = _to_yuan(raw)
 			return [val] if val is not None else []

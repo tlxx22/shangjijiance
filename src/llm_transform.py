@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from typing import Any
 
 from .extract_client import chat_completion
 from .config_manager import load_extract_fields, generate_extract_prompt
 from .custom_tools import extract_fields_from_html, normalize_field_value
+from .deepseek_langchain import invoke_structured
+from .structured_schemas import build_extract_fields_model
 from .field_schemas import LotProducts, LotCandidates, normalize_announcement_type, normalize_estimated_amount
 
 
@@ -152,28 +153,24 @@ Rules:
 
 	user_prompt = f"SOURCE_TEXT:\\n{text}"
 	try:
-		output = await asyncio.to_thread(
-			chat_completion,
+		Schema = build_extract_fields_model(fields, model_name="NormalizeItemMetaFlat")
+		result = await asyncio.to_thread(
+			invoke_structured,
 			[
 				{"role": "system", "content": system_prompt},
 				{"role": "user", "content": user_prompt},
 			],
+			Schema,
 		)
 	except Exception:
 		return empty_result
 
-	out = _strip_code_fences(output)
-	try:
-		parsed = json.loads(out)
-		if not isinstance(parsed, dict):
-			return empty_result
-	except Exception:
-		return empty_result
+	extracted = result.model_dump() if hasattr(result, "model_dump") else {}
 
 	# Normalize by field types using existing normalize_field_value.
 	normalized: dict[str, Any] = {}
 	for f in fields:
-		raw_value = parsed.get(f.key, _TYPE_DEFAULTS.get(f.type, ""))
+		raw_value = extracted.get(f.key, _TYPE_DEFAULTS.get(f.type, ""))
 		normalized[f.key] = normalize_field_value(f.key, raw_value, f.type)
 	return normalized
 

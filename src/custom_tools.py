@@ -481,8 +481,9 @@ from browser_use import Agent
 from browser_use.tools.service import Tools
 from .config_manager import load_extract_fields, generate_extract_prompt
 from .prompts import GLOBAL_RULES
-from .extract_client import chat_completion
 from .address_normalizer import extract_admin_divisions_from_details
+from .deepseek_langchain import invoke_structured
+from .structured_schemas import build_extract_fields_model
 from .field_schemas import (
 	LotProducts,
 	LotCandidates,
@@ -911,88 +912,6 @@ async def extract_fields_from_page(browser_session, llm, site_name: str, stage: 
 		return empty_result
 
 
-def _parse_extracted_fields_output(output: Any, *, site_name: str, stage: str, fields: list) -> dict:
-	"""
-	Parse and normalize a model output into our expected field dict.
-	Reuses the same tolerant JSON/YAML parsing and normalize_field_value logic.
-	"""
-	empty_result = {f.key: TYPE_DEFAULTS.get(f.type, "") for f in fields}
-
-	if not output:
-		logger.warning(f"[{site_name}] 字段提取无返回（stage={stage}）")
-		return empty_result
-
-	output_str = str(output).strip()
-
-	# 处理转义引号（LLM 输出可能包含 \\\" 而非 \"）
-	if '\\"' in output_str:
-		output_str = output_str.replace('\\"', '"')
-
-	# 移除可能的 markdown 代码块标识
-	output_str = re.sub(r'^```json\\s*', '', output_str)
-	output_str = re.sub(r'^```\\s*', '', output_str)
-	output_str = re.sub(r'\\s*```$', '', output_str)
-
-	# 提取 JSON/YAML 片段：优先 {..}，否则 [..]，否则尝试整段解析
-	obj_start = output_str.find('{')
-	obj_end = output_str.rfind('}')
-	arr_start = output_str.find('[')
-	arr_end = output_str.rfind(']')
-
-	if obj_start != -1 and obj_end > obj_start:
-		snippet = output_str[obj_start:obj_end + 1]
-	elif arr_start != -1 and arr_end > arr_start:
-		snippet = output_str[arr_start:arr_end + 1]
-	else:
-		snippet = output_str
-
-	# 去掉常见的结尾多余逗号（LLM 有时会输出 trailing comma）
-	snippet = re.sub(r',(\s*[}\]])', r'\1', snippet)
-
-	# 有些输出会包含字面量 "\\n"（而非真实换行），先做一次安全还原
-	snippet = _unescape_control_chars_outside_strings(snippet)
-
-	# 先按严格 JSON 解析，失败则降级为 YAML（容忍单引号/不加引号 key）
-	try:
-		extracted = json.loads(snippet)
-	except json.JSONDecodeError as e_json:
-		try:
-			extracted = yaml.safe_load(snippet)
-			if extracted is None:
-				extracted = {}
-		except Exception as e_yaml:
-			logger.warning(f"[{site_name}] JSON/YAML 解析失败（stage={stage}）: {e_json} / {e_yaml}")
-			return empty_result
-
-	# stage=lots 允许 LLM 直接返回数组，按内容推断属于哪个字段
-	if stage == "lots" and isinstance(extracted, list):
-		candidate_marker_keys = {"type", "candidates", "candidatePrices", "candidate_prices", "winner", "winningAmount", "winning_amount"}
-		has_candidate_keys = any(isinstance(x, dict) and any(k in x for k in candidate_marker_keys) for x in extracted)
-		extracted = {
-			"lotProducts": [] if has_candidate_keys else extracted,
-			"lotCandidates": extracted if has_candidate_keys else [],
-		}
-
-	if not isinstance(extracted, dict):
-		logger.warning(f"[{site_name}] 解析结果不是对象（stage={stage}），返回空值")
-		return empty_result
-
-	# 顶层 key 容错：支持 snake_case
-	for f in fields:
-		if f.key in extracted:
-			continue
-		snake = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', f.key).lower()
-		if snake in extracted:
-			extracted[f.key] = extracted.get(snake)
-
-	normalized: dict = {}
-	for f in fields:
-		raw_value = extracted.get(f.key, TYPE_DEFAULTS.get(f.type, ""))
-		normalized[f.key] = normalize_field_value(f.key, raw_value, f.type)
-
-	return normalized
-
-
 def _sanitize_html_for_extraction(html: str, *, site_name: str, max_chars: int = 200_000) -> str:
 	"""
 	Lightweight, non-LLM HTML cleanup before sending to DeepSeek for field extraction.
@@ -1015,6 +934,34 @@ def _sanitize_html_for_extraction(html: str, *, site_name: str, max_chars: int =
 
 	soup = BeautifulSoup(html, "html.parser")
 
+	# Some sites embed the real "announcement content" inside same-origin iframes via `srcdoc`.
+	# If we later drop iframes (common cleanup step), we'd lose the main content entirely.
+	# Inline meaningful `iframe[srcdoc]` content early so subsequent cleanup preserves it.
+	for iframe in soup.find_all("iframe"):
+		srcdoc_raw = ""
+		with contextlib.suppress(Exception):
+			srcdoc_raw = iframe.get("srcdoc") or ""
+		srcdoc = str(srcdoc_raw).strip()
+		if not srcdoc or len(srcdoc) < 1000:
+			continue
+		try:
+			inner = BeautifulSoup(srcdoc, "html.parser")
+			inner_root = inner.body or inner
+			wrapper = soup.new_tag("div")
+			for child in list(getattr(inner_root, "contents", []) or []):
+				wrapper.append(child)
+			iframe.replace_with(wrapper)
+		except Exception:
+			# As a last resort, keep plain text so we don't return an empty body.
+			try:
+				inner_text = BeautifulSoup(srcdoc, "html.parser").get_text(" ", strip=True)
+			except Exception:
+				inner_text = ""
+			if inner_text:
+				iframe.replace_with(soup.new_string(inner_text))
+			else:
+				iframe.decompose()
+
 	# Remove comments.
 	for c in soup.find_all(string=lambda x: isinstance(x, Comment)):
 		c.extract()
@@ -1030,13 +977,19 @@ def _sanitize_html_for_extraction(html: str, *, site_name: str, max_chars: int =
 	for el in soup.select('[hidden], [aria-hidden="true"], [role="dialog"], [aria-modal="true"]'):
 		el.decompose()
 	for el in soup.select("[style]"):
-		style = (el.get("style") or "").replace(" ", "").lower()
+		style_raw = ""
+		with contextlib.suppress(Exception):
+			style_raw = el.get("style") or ""
+		style = str(style_raw).replace(" ", "").lower()
 		if "display:none" in style or "visibility:hidden" in style:
 			el.decompose()
 
 	# Drop inline/base64 images; keep alt text if present.
 	for img in soup.find_all("img"):
-		alt = (img.get("alt") or "").strip()
+		alt_raw = ""
+		with contextlib.suppress(Exception):
+			alt_raw = img.get("alt") or ""
+		alt = str(alt_raw).strip()
 		if alt:
 			img.replace_with(soup.new_string(alt))
 		else:
@@ -1126,18 +1079,27 @@ Rules:
 	user_prompt = f"HTML:\\n{html}"
 
 	try:
-		output = await asyncio.to_thread(
-			chat_completion,
+		Schema = build_extract_fields_model(fields, model_name=f"ExtractFields_{stage}")
+		result = await asyncio.to_thread(
+			invoke_structured,
 			[
 				{"role": "system", "content": system_prompt},
 				{"role": "user", "content": user_prompt},
 			],
+			Schema,
 		)
 	except Exception as e:
 		logger.warning(f"[{site_name}] DeepSeek 字段提取调用失败（stage={stage}）: {e}")
 		return empty_result
 
-	return _parse_extracted_fields_output(output, site_name=site_name, stage=stage, fields=fields)
+	extracted = result.model_dump() if hasattr(result, "model_dump") else {}
+	normalized: dict = {}
+	for f in fields:
+		raw_value = extracted.get(f.key, TYPE_DEFAULTS.get(f.type, ""))
+		normalized[f.key] = normalize_field_value(f.key, raw_value, f.type)
+
+	logger.info(f"[{site_name}] ✓ 字段提取成功（stage={stage}）")
+	return normalized
 
 
 _ENGINEERING_MACHINERY_CLASSIFY_SYSTEM_PROMPT = """
@@ -1173,85 +1135,10 @@ Schema:
 """.strip()
 
 
-def _parse_engineering_machinery_classifier_output(output: Any, *, site_name: str) -> tuple[bool | None, str]:
-	"""
-	Tolerantly parse LLM output for the engineering machinery classifier.
-
-	Returns: (decision, reason)
-	- decision is True/False when parsed, None when unknown/unparseable (callers should default to keep).
-	"""
-	if not output:
-		return None, "empty_output"
-
-	output_str = str(output).strip()
-
-	# Handle escaped quotes (LLM sometimes returns \\\" instead of \")
-	if '\\"' in output_str:
-		output_str = output_str.replace('\\"', '"')
-
-	# Remove possible markdown fences.
-	output_str = re.sub(r'^```json\\s*', '', output_str)
-	output_str = re.sub(r'^```\\s*', '', output_str)
-	output_str = re.sub(r'\\s*```$', '', output_str)
-
-	# Extract JSON snippet.
-	obj_start = output_str.find('{')
-	obj_end = output_str.rfind('}')
-	if obj_start != -1 and obj_end > obj_start:
-		snippet = output_str[obj_start:obj_end + 1]
-	else:
-		snippet = output_str
-
-	# Remove trailing commas.
-	snippet = re.sub(r',(\s*[}\]])', r'\1', snippet)
-	snippet = _unescape_control_chars_outside_strings(snippet)
-
-	try:
-		parsed = json.loads(snippet)
-	except json.JSONDecodeError:
-		try:
-			parsed = yaml.safe_load(snippet)
-		except Exception as e:
-			logger.debug(f"[{site_name}] classifier JSON parse failed: {e}")
-			return None, f"unparseable: {output_str[:200]}"
-
-	# Accept plain boolean.
-	if isinstance(parsed, bool):
-		return parsed, ""
-
-	if not isinstance(parsed, dict):
-		low = output_str.strip().lower()
-		if low in {"true", "false"}:
-			return low == "true", ""
-		return None, f"unexpected_type={type(parsed).__name__}"
-
-	val = parsed.get("isEngineeringMachinery")
-	if val is None:
-		val = (
-			parsed.get("is_engineering_machinery")
-			or parsed.get("isGongchengjixie")
-			or parsed.get("is_gongchengjixie")
-		)
-
-	reason = str(parsed.get("reason") or parsed.get("rationale") or parsed.get("explain") or "").strip()
-	conf = str(parsed.get("confidence") or "").strip()
-	if conf:
-		reason = f"{conf}: {reason}".strip(": ").strip()
-	if len(reason) > 200:
-		reason = reason[:200]
-
-	if isinstance(val, bool):
-		return val, reason
-
-	if isinstance(val, str):
-		v = val.strip().lower()
-		if v in {"true", "1", "yes", "y", "是", "相关", "属于"}:
-			return True, reason
-		if v in {"false", "0", "no", "n", "否", "不相关", "不属于"}:
-			return False, reason
-
-	# Fallback: unknown -> keep.
-	return None, reason or f"missing_bool_field: {output_str[:200]}"
+class EngineeringMachineryClassification(BaseModel):
+	isEngineeringMachinery: bool | None = None
+	confidence: str = ""
+	reason: str = ""
 
 
 async def llm_is_engineering_machinery_project(
@@ -1277,18 +1164,27 @@ async def llm_is_engineering_machinery_project(
 announcementTitle: {title}""".strip()
 
 	try:
-		output = await asyncio.to_thread(
-			chat_completion,
+		result = await asyncio.to_thread(
+			invoke_structured,
 			[
 				{"role": "system", "content": _ENGINEERING_MACHINERY_CLASSIFY_SYSTEM_PROMPT},
 				{"role": "user", "content": user_prompt},
 			],
+			EngineeringMachineryClassification,
 		)
 	except Exception as e:
 		logger.warning(f"[{site_name}] 工程机械类判定 LLM 调用失败: {e}")
 		return None, f"llm_error: {e}"
 
-	return _parse_engineering_machinery_classifier_output(output, site_name=site_name)
+	decision = result.isEngineeringMachinery
+	reason = (result.reason or "").strip()
+	conf = (result.confidence or "").strip()
+	if conf:
+		reason = f"{conf}: {reason}".strip(": ").strip()
+	if len(reason) > 200:
+		reason = reason[:200]
+
+	return decision, reason or ""
 
 
 _ESTIMATED_AMOUNT_VALUE_RE = re.compile(r"^\d+(?:\.\d+)?(?:~\d+(?:\.\d+)?)?$")
@@ -1531,6 +1427,34 @@ def _html_to_clean_content_html(html: str, site_name: str) -> str:
 
 	soup = BeautifulSoup(html, "html.parser")
 
+	# Some sites embed the real "announcement content" inside same-origin iframes via `srcdoc`.
+	# If we later drop/convert iframes, we'd lose the main content entirely.
+	# Inline meaningful `iframe[srcdoc]` content early so subsequent cleanup preserves it.
+	for iframe in soup.find_all("iframe"):
+		srcdoc_raw = ""
+		with contextlib.suppress(Exception):
+			srcdoc_raw = iframe.get("srcdoc") or ""
+		srcdoc = str(srcdoc_raw).strip()
+		if not srcdoc or len(srcdoc) < 1000:
+			continue
+		try:
+			inner = BeautifulSoup(srcdoc, "html.parser")
+			inner_root = inner.body or inner
+			wrapper = soup.new_tag("div")
+			for child in list(getattr(inner_root, "contents", []) or []):
+				wrapper.append(child)
+			iframe.replace_with(wrapper)
+		except Exception:
+			# As a last resort, keep plain text so we don't return an empty body.
+			try:
+				inner_text = BeautifulSoup(srcdoc, "html.parser").get_text(" ", strip=True)
+			except Exception:
+				inner_text = ""
+			if inner_text:
+				iframe.replace_with(soup.new_string(inner_text))
+			else:
+				iframe.decompose()
+
 	# Remove comments.
 	for c in soup.find_all(string=lambda x: isinstance(x, Comment)):
 		c.extract()
@@ -1546,21 +1470,30 @@ def _html_to_clean_content_html(html: str, site_name: str) -> str:
 	for el in soup.select('[hidden], [aria-hidden="true"], [role="dialog"], [aria-modal="true"]'):
 		el.decompose()
 	for el in soup.select("[style]"):
-		style = (el.get("style") or "").replace(" ", "").lower()
+		style_raw = ""
+		with contextlib.suppress(Exception):
+			style_raw = el.get("style") or ""
+		style = str(style_raw).replace(" ", "").lower()
 		if "display:none" in style or "visibility:hidden" in style:
 			el.decompose()
 
 	# Remove images (base64/site icons etc) — keep alt if present.
 	for img in soup.find_all("img"):
-		alt = (img.get("alt") or "").strip()
+		alt_raw = ""
+		with contextlib.suppress(Exception):
+			alt_raw = img.get("alt") or ""
+		alt = str(alt_raw).strip()
 		if alt:
 			img.replace_with(soup.new_string(alt))
 		else:
 			img.decompose()
 
-	# Convert iframes to links (some sites embed content in an iframe).
+	# Convert remaining iframes to links (best-effort); drop empty ones.
 	for iframe in soup.find_all("iframe"):
-		src = (iframe.get("src") or "").strip()
+		src_raw = ""
+		with contextlib.suppress(Exception):
+			src_raw = iframe.get("src") or ""
+		src = str(src_raw).strip()
 		if not src:
 			iframe.decompose()
 			continue
@@ -1603,17 +1536,75 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
 	"""
 	提取当前详情页的“正文容器”HTML（尽量保留表格/结构），不做 Markdown 转换。
 	"""
+	stage = "init"
+	state_url: str | None = None
 	try:
+		stage = "browser_state_summary"
+		with contextlib.suppress(Exception):
+			state = await browser_session.get_browser_state_summary(include_screenshot=False)
+			state_url = str(getattr(state, "url", "") or "").strip() or None
+
+		stage = "get_or_create_cdp_session"
 		cdp_session = await browser_session.get_or_create_cdp_session()
-		html_result = await cdp_session.cdp_client.send.Runtime.evaluate(
-			params={
-				"expression": """
+		html_result: Any | None = None
+		stage = "runtime_evaluate"
+		try:
+			html_result = await cdp_session.cdp_client.send.Runtime.evaluate(
+				params={
+					"expression": """
 (() => {
   // Try to extract the *detail content container* first.
+  // Some sites render the main content inside same-origin iframes (e.g. srcdoc). In that case, prefer the iframe doc.
   // Some sites (e.g. sp.iccec.cn) have a huge navigation shell; returning full DOM makes Markdown very noisy.
   const keywords = ['公告内容', '公告标题', '项目编号', '发布时间', '附件列表', '物资信息', '相关公告列表'];
   const body = document.body || document.documentElement;
   if (!body) return '';
+
+  // 0) Iframe-first: pick the iframe whose inner document has the most meaningful text.
+  // (Parents' innerText won't include iframe document content, so the normal scorer would miss it.)
+  const outerTextLen = (() => {
+    try { return (body.innerText || '').trim().length; } catch (e) { return 0; }
+  })();
+  try {
+    const iframes = Array.from(document.querySelectorAll('iframe'));
+    let bestIframeHtml = '';
+    let bestIframeTextLen = 0;
+    for (const f of iframes) {
+      // Same-origin / srcdoc iframe: read inner document directly.
+      try {
+        const doc = f.contentDocument;
+        if (doc && doc.documentElement) {
+          const t = ((doc.body && doc.body.innerText) ? doc.body.innerText : '').trim();
+          const l = t.length;
+          if (l > bestIframeTextLen) {
+            const h = doc.documentElement.outerHTML || '';
+            if (h && h.length > 500) {
+              bestIframeTextLen = l;
+              bestIframeHtml = h;
+            }
+          }
+        }
+      } catch (e) {}
+
+      // If srcdoc exists, it's accessible even if contentDocument access is restricted.
+      try {
+        const srcdoc = f.getAttribute('srcdoc') || '';
+        if (srcdoc && srcdoc.length > 1000) {
+          // Rough text length estimate (strip tags).
+          const l = srcdoc.replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim().length;
+          if (l > bestIframeTextLen) {
+            bestIframeTextLen = l;
+            bestIframeHtml = srcdoc;
+          }
+        }
+      } catch (e) {}
+    }
+
+    // Prefer iframe only when it is clearly more informative than the outer page.
+    if (bestIframeHtml && bestIframeTextLen >= 800 && bestIframeTextLen >= outerTextLen * 2) {
+      return bestIframeHtml;
+    }
+  } catch (e) {}
 
   function textOf(el) {
     try { return (el.innerText || '').trim(); } catch (e) { return ''; }
@@ -1624,7 +1615,6 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
   function score(el) {
     const t = textOf(el);
     const len = t.length;
-    if (len < 300) return -1e18;
     let hits = 0;
     for (const k of keywords) if (t.includes(k)) hits++;
     // Prefer containers that look like "detail" rather than nav menus.
@@ -1654,11 +1644,11 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
   // 2) Keyword-driven: find nodes containing key labels and choose the best parent-like block
   if (!best) {
     const all = body.querySelectorAll('div,section,main,article');
-    // pre-filter by text length to keep it fast
+    // pre-rank by text length to keep it fast
     const ranked = [];
     for (const n of all) {
       const t = textOf(n);
-      if (t.length >= 300) ranked.push([t.length, n]);
+      ranked.push([t.length, n]);
     }
     ranked.sort((a,b) => b[0]-a[0]);
     const top = ranked.slice(0, 300).map(x => x[1]);
@@ -1674,18 +1664,61 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
   return root.outerHTML || '';
 })()
 """,
-				"returnByValue": True,
-			},
-			session_id=cdp_session.session_id,
-		)
+					"returnByValue": True,
+				},
+				session_id=cdp_session.session_id,
+			)
+		except Exception as eval_err:
+			logger.debug(
+				f"[{site_name}] Runtime.evaluate failed: {eval_err}"
+				+ (f" url={state_url}" if state_url else "")
+			)
+			# Best-effort fallback: try a simpler outerHTML extraction.
+			with contextlib.suppress(Exception):
+				html_result = await cdp_session.cdp_client.send.Runtime.evaluate(
+					params={
+						"expression": "(document.documentElement && document.documentElement.outerHTML) || ''",
+						"returnByValue": True,
+					},
+					session_id=cdp_session.session_id,
+				)
 
-		html = html_result.get("result", {}).get("value") or ""
+		stage = "parse_runtime_result"
+		html = ""
+		if isinstance(html_result, dict):
+			exception_details = html_result.get("exceptionDetails")
+			if exception_details:
+				logger.debug(f"[{site_name}] Runtime.evaluate exceptionDetails: {exception_details}")
+			r = html_result.get("result")
+			if isinstance(r, dict):
+				v = r.get("value")
+				if isinstance(v, str):
+					html = v
+		elif html_result is None:
+			logger.debug(
+				f"[{site_name}] Runtime.evaluate returned None"
+				+ (f" url={state_url}" if state_url else "")
+			)
+		elif html_result is not None:
+			logger.debug(f"[{site_name}] Runtime.evaluate returned unexpected type: {type(html_result)}")
+
 		if not html:
 			return ""
 
-		return _html_to_clean_content_html(html, site_name=site_name).strip()
-	except Exception as e:
-		logger.warning(f"[{site_name}] 提取公告原文(HTML)失败: {e}")
+		stage = "cleanup"
+		try:
+			return _html_to_clean_content_html(html, site_name=site_name).strip()
+		except Exception as clean_err:
+			logger.warning(
+				f"[{site_name}] HTML cleanup failed, returning raw HTML: {clean_err}"
+				+ (f" url={state_url}" if state_url else "")
+			)
+			return str(html).strip()
+	except Exception:
+		logger.exception(
+			f"[{site_name}] 提取公告原文(HTML)失败: stage={stage}"
+			+ (f" url={state_url}" if state_url else "")
+		)
 		return ""
 
 
@@ -1890,12 +1923,25 @@ def create_save_detail_tools(
 				if _locked_list_url and detail_url and detail_url not in ("unknown", ""):
 					list_parts = urlsplit(_locked_list_url)
 					cur_parts = urlsplit(detail_url)
-					same_route = (
+					same_origin_path = (
 						list_parts.scheme == cur_parts.scheme
 						and list_parts.netloc == cur_parts.netloc
 						and list_parts.path == cur_parts.path
 					)
-					if same_route:
+					# NOTE: Some SPA sites keep the same path and only change the fragment (#...).
+					# In that case, treat it as "still on list page" ONLY when the fragment also matches.
+					# Otherwise we'd incorrectly close the newly opened detail tab and report not_on_detail_page.
+					if same_origin_path:
+						list_frag = (list_parts.fragment or "").strip()
+						cur_frag = (cur_parts.fragment or "").strip()
+						if list_frag or cur_frag:
+							same_fragment = (list_frag == cur_frag)
+						else:
+							same_fragment = True
+						if not same_fragment:
+							# Different fragment under same path: likely navigated within SPA (e.g. list -> detail).
+							same_origin_path = False
+					if same_origin_path:
 						logger.warning(
 							f"[{site_name}] ⚠️ save_detail 在列表页被调用（URL 未进入详情页）: {detail_url}"
 						)
@@ -1940,6 +1986,10 @@ def create_save_detail_tools(
 			# 4. 提取公告原文（HTML，不做 Markdown 转换）
 			announcement_content = await extract_page_content(browser_session, site_name)
 			if not announcement_content:
+				logger.warning(f"[{site_name}] 提取公告原文(HTML)失败: 内容为空")
+				# 失败也要尽量回到列表页并回收 tab，避免后续 focus/index 混乱
+				with contextlib.suppress(Exception):
+					await _return_to_list_after_save(browser_session, current_url=str(detail_url or ""))
 				return ActionResult(
 					extracted_content=f"提取公告原文失败: {title}",
 					error="提取公告原文失败"

@@ -4,7 +4,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .extract_client import chat_completion
+from pydantic import BaseModel, ConfigDict
+
+from .deepseek_langchain import invoke_structured
 from .logger_config import get_logger
 
 logger = get_logger()
@@ -77,6 +79,32 @@ class AddressGroup:
 	province: str
 	city: str
 	district: str
+
+
+class NormalizedAddress(BaseModel):
+	model_config = ConfigDict(extra="ignore")
+
+	country: str = ""
+	province: str = ""
+	city: str = ""
+	district: str = ""
+
+
+class AdminDivisions(BaseModel):
+	model_config = ConfigDict(extra="ignore")
+
+	buyerCountry: str = ""
+	buyerProvince: str = ""
+	buyerCity: str = ""
+	buyerDistrict: str = ""
+	projectCountry: str = ""
+	projectProvince: str = ""
+	projectCity: str = ""
+	projectDistrict: str = ""
+	deliveryCountry: str = ""
+	deliveryProvince: str = ""
+	deliveryCity: str = ""
+	deliveryDistrict: str = ""
 
 
 def _is_illegal_text(s: str) -> bool:
@@ -165,16 +193,6 @@ def _needs_llm_normalize(group: AddressGroup) -> bool:
 		or (group.city or "").strip()
 		or (group.district or "").strip()
 	)
-
-
-def _strip_code_fences(text: str) -> str:
-	s = (text or "").strip()
-	if s.startswith("```"):
-		s = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", s)
-		s = re.sub(r"\s*```$", "", s)
-	return s.strip()
-
-
 async def normalize_address_group_with_deepseek(
 	group: AddressGroup,
 	max_retries: int = 3,
@@ -226,24 +244,20 @@ Rules:
 
 	last_reason = ""
 	for attempt in range(1, max_retries + 1):
-		out = await asyncio.to_thread(
-			chat_completion,
-			[
-				{"role": "system", "content": system_prompt},
-				{"role": "user", "content": user_prompt},
-			],
-		)
-		out = _strip_code_fences(out)
-
 		try:
-			parsed: Any = json.loads(out)
+			result = await asyncio.to_thread(
+				invoke_structured,
+				[
+					{"role": "system", "content": system_prompt},
+					{"role": "user", "content": user_prompt},
+				],
+				NormalizedAddress,
+			)
 		except Exception:
-			last_reason = "json_parse_failed"
+			last_reason = "llm_call_failed"
 			continue
 
-		if not isinstance(parsed, dict):
-			last_reason = "not_object"
-			continue
+		parsed = result.model_dump()
 
 		candidate = AddressGroup(
 			country=str(parsed.get("country", "") or "").strip(),
@@ -471,20 +485,19 @@ Rules:
 
 	best_cand: dict[str, str] | None = None
 	for _ in range(max_retries):
-		out = await asyncio.to_thread(
-			chat_completion,
-			[
-				{"role": "system", "content": system_prompt},
-				{"role": "user", "content": user_prompt},
-			],
-		)
-		out = _strip_code_fences(out)
 		try:
-			parsed = json.loads(out)
+			result = await asyncio.to_thread(
+				invoke_structured,
+				[
+					{"role": "system", "content": system_prompt},
+					{"role": "user", "content": user_prompt},
+				],
+				AdminDivisions,
+			)
 		except Exception:
 			continue
-		if not isinstance(parsed, dict):
-			continue
+
+		parsed = result.model_dump()
 
 		cand: dict[str, str] = {}
 		for k in expected_keys:
