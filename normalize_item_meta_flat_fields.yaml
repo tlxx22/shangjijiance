@@ -52,7 +52,12 @@ fields:
     type: string
     stage: flat
     required: true
-    hint: 项目本公告发布日期，格式 YYYY-MM-DD（优先详情页发布日期）
+    hint: |
+      公告实际发布日期，格式 YYYY-MM-DD。
+      - 必须从输入结构体中的“发布日期/发布时间/公告日期”等元数据字段提取（字段名不固定时，以 description 字段对各 key 含义的说明为准）。
+      - 若该元数据字段为时间戳（秒/毫秒），请换算为 YYYY-MM-DD；若为其它日期文本，也请规范为 YYYY-MM-DD。
+      - 禁止从正文内容字段（例如 detail/announcementContent/公告正文 等）中的日期推断 announcementDate；正文中的“预计发布时间/计划发布时间”等不是公告发布日期。
+      - 找不到明确的发布日期字段时填 ""（不要猜）。
 
   - key: bidOpenDate
     name: 开标日期

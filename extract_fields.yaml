@@ -35,7 +35,9 @@ fields:
     type: string
     stage: flat
     required: true
-    hint: 项目本公告发布日期，格式 YYYY-MM-DD（优先详情页发布日期）
+    hint: |
+      项目本公告发布日期，格式 YYYY-MM-DD（优先详情页明确标注的“发布时间/发布日期/公告时间”等字段）。
+      注意：正文中的“预计发布时间/计划发布时间”等属于计划日期，不作为公告发布日期。
 
   - key: bidOpenDate
     name: 开标日期
