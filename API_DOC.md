@@ -384,3 +384,17 @@ curl -X POST http://localhost:8000/embedding \
   }
 }
 ```
+
+### 响应（422）
+
+当公告类别 `announcementType` 无法归一化到 13 选 1 的枚举范围内时，服务会调用模型进行最多 3 次“类型修复/归一化”。如果达到上限仍失败，为避免输出错误类型污染下游，将返回 422。
+
+```json
+{
+  "detail": {
+    "message": "announcementType invalid after 3 attempts",
+    "rawType": "公开招标",
+    "maxRetries": 3
+  }
+}
+```

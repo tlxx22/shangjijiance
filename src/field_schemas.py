@@ -95,9 +95,25 @@ def normalize_announcement_type(raw: Any) -> str:
 	"""
 	将 LLM/页面文本归一化为 13 选 1 的公告类别
 	"""
+	normalized = try_normalize_announcement_type(raw)
+	if normalized:
+		return normalized
+	text = ("" if raw is None else str(raw)).strip()
+	if text:
+		logger.warning(f"公告类别无法映射: {text!r}，将返回空字符串等待上层修复/跳过")
+	return ""
+
+
+def try_normalize_announcement_type(raw: Any) -> str | None:
+	"""
+	严格归一化公告类别（13 选 1）。
+
+	- 能映射：返回枚举值
+	- 映射不了：返回 None（不再兜底为“招标”，避免静默污染数据）
+	"""
 	text = ("" if raw is None else str(raw)).strip()
 	if not text:
-		return "招标"
+		return None
 	if text in ANNOUNCEMENT_TYPES:
 		return text
 
@@ -105,8 +121,7 @@ def normalize_announcement_type(raw: Any) -> str:
 		if key in text:
 			return ANNOUNCEMENT_TYPE_MAPPING[key]
 
-	logger.warning(f"公告类别无法映射: {text!r}，兜底为 '招标'")
-	return "招标"
+	return None
 
 
 # ===== 金额（元）=====

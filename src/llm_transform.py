@@ -9,7 +9,14 @@ from .config_manager import load_extract_fields, generate_extract_prompt
 from .custom_tools import extract_fields_from_html, normalize_field_value
 from .deepseek_langchain import invoke_structured
 from .structured_schemas import build_extract_fields_model
-from .field_schemas import LotProducts, LotCandidates, normalize_announcement_type, normalize_estimated_amount
+from .announcement_type_repair import AnnouncementTypeRepairError, repair_announcement_type
+from .field_schemas import (
+	ANNOUNCEMENT_TYPES,
+	LotProducts,
+	LotCandidates,
+	try_normalize_announcement_type,
+	normalize_estimated_amount,
+)
 
 
 def _strip_code_fences(text: str) -> str:
@@ -104,7 +111,7 @@ def _normalize_item_to_crawler_schema(raw_item: dict[str, Any]) -> dict[str, Any
 		for f in load_extract_fields(stage=stage):
 			item[f.key] = normalize_field_value(f.key, item.get(f.key), f.type)
 
-	item["announcementType"] = normalize_announcement_type(item.get("announcementType"))
+	item["announcementType"] = try_normalize_announcement_type(item.get("announcementType")) or ""
 	return item
 
 
@@ -231,7 +238,27 @@ async def normalize_source_json_to_item(source_json: str) -> dict[str, Any]:
 	merged["lotProducts"] = (lots_fields or {}).get("lotProducts") or []
 	merged["lotCandidates"] = (lots_fields or {}).get("lotCandidates") or []
 
+	raw_announcement_type = (flat_fields or {}).get("announcementType")
 	item = _normalize_item_to_crawler_schema(merged)
+
+	# 公告类别（13 选 1）强校验：
+	# - 不再“无法映射就兜底成招标”
+	# - 如果初次抽取不在范围内：调用 DeepSeek 做一次“类型归一化/分类”修复（最多 3 次）
+	if (item.get("announcementType") or "").strip() not in ANNOUNCEMENT_TYPES:
+		repaired = await repair_announcement_type(
+			site_name="normalize_item",
+			announcement_title=item.get("announcementName"),
+			announcement_content=item.get("announcementContent") or src,
+			raw_announcement_type=str(raw_announcement_type or merged.get("announcementType") or ""),
+			max_retries=3,
+		)
+		if not repaired:
+			raise AnnouncementTypeRepairError(
+				"announcementType invalid after 3 attempts",
+				raw_type=str(raw_announcement_type or merged.get("announcementType") or ""),
+				max_retries=3,
+			)
+		item["announcementType"] = repaired
 
 	# estimatedAmount：仅当公告类型为【招标/候选】时才保留（由抽取阶段 DeepSeek 结合全文生成）。
 	# 本阶段只做：类型 gating + 正则校验（不做任何兜底/推导/再调用）。

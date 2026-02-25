@@ -40,6 +40,7 @@ from src.embedding_client import get_text_embedding
 from src.llm_transform import convert_announcement_content_to_markdown, normalize_source_json_to_item
 from src.address_normalizer import extract_admin_divisions_from_details
 from src.custom_tools import compute_data_id, _parse_address_parts_from_detail
+from src.announcement_type_repair import AnnouncementTypeRepairError
 from src.browser_use_budget import get_budget
 
 logger = get_logger()
@@ -313,6 +314,11 @@ async def normalize_item(http_request: Request):
         return {"data": item}
     except ValueError as e:
         raise HTTPException(400, str(e))
+    except AnnouncementTypeRepairError as e:
+        raise HTTPException(
+            422,
+            {"message": str(e), "rawType": e.raw_type, "maxRetries": e.max_retries},
+        )
     except RuntimeError as e:
         raise HTTPException(500, str(e))
     except Exception as e:

@@ -487,11 +487,12 @@ from .structured_schemas import build_extract_fields_model
 from .field_schemas import (
 	LotProducts,
 	LotCandidates,
-	normalize_announcement_type,
+	try_normalize_announcement_type,
 	_to_yuan,
 	normalize_date_ymd,
 	normalize_estimated_amount,
 )
+from .announcement_type_repair import repair_announcement_type
 
 
 # 全局缓存字段配置和提示词（避免每次调用都读取文件）
@@ -2064,8 +2065,35 @@ def create_save_detail_tools(
 			if not result_data.get("announcementDate"):
 				result_data["announcementDate"] = normalize_date_ymd(date) or date
 
-			# 公告类别归一化（13 选 1）
-			result_data["announcementType"] = normalize_announcement_type(result_data.get("announcementType"))
+			# 公告类别（13 选 1）强校验：
+			# - 不再“无法映射就兜底成招标”
+			# - 如果初次抽取不在范围内：调用 DeepSeek 做一次“类型归一化/分类”修复（最多 3 次）
+			raw_announcement_type = result_data.get("announcementType")
+			normalized_type = try_normalize_announcement_type(raw_announcement_type)
+			if not normalized_type:
+				normalized_type = await repair_announcement_type(
+					site_name=site_name,
+					announcement_title=title,
+					announcement_content=announcement_content,
+					raw_announcement_type=str(raw_announcement_type or ""),
+					max_retries=3,
+				)
+
+			if not normalized_type:
+				# 达到上限仍失败：告警 + 跳过（不落盘/不输出 SSE item），避免错误类型污染下游。
+				logger.warning(
+					f"[{site_name}] 公告类别修复失败（已达上限 3 次），已跳过: {title[:60]}... "
+					f"(raw={str(raw_announcement_type or '')!r}, url={str(detail_url or '')})"
+				)
+				# 视为“已处理”，避免本次 run 内重复消耗。
+				seen_detail_keys.add(dedup_key)
+				await _return_to_list_after_save(browser_session, current_url=str(detail_url or ""))
+				return ActionResult(
+					extracted_content="skipped_invalid_announcement_type",
+					long_term_memory=f"跳过（公告类型无法归一化）: {title[:30]}...",
+				)
+
+			result_data["announcementType"] = normalized_type
 
 			# estimatedAmount：仅当公告类型为【招标/候选】时才保留（由抽取阶段 DeepSeek 结合全文生成）。
 			# 本阶段只做：类型 gating + 正则校验（不做任何兜底/推导/再调用）。
