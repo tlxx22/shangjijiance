@@ -120,6 +120,11 @@ fields:
     hint: |
       从详情页提取到的“采购人/招标人/采购单位/招标单位”的完整地址（全地址文本），用于后续解析国家/省/市/区。
       注意：不要把“代理机构/平台技术支持”等其它单位的地址当成采购单位地址；如果只有这些地址，填 ""。
+      结构化输入兜底（JSON + description）：
+      - 若输入文本本身是 JSON，且存在 description 对各字段含义的说明：当无法找到明确的采购单位“详细地址”字段时，
+        请根据 description 指明的“采购单位省/市/区县”（字段名不固定，可能分别映射到 buyerProvince/buyerCity/buyerDistrict）
+        将省/市/区县按顺序拼接成最小可解析地址（例如："西藏自治区林芝市波密县"）填入 buyerAddressDetail（不要猜街道门牌）。
+      - 禁止从正文内容字段（例如 detail/announcementContent/公告正文）中的“送货地址/交货地址/履约地点”等回填采购单位地址。
       找不到填 ""。
 
   - key: projectCountry
@@ -153,6 +158,11 @@ fields:
     hint: |
       从详情页提取到的“项目地点/项目所在地/建设地点/工程地点”等项目相关地址（全地址文本），用于后续解析国家/省/市/区。
       注意：不要使用采购单位/代理机构的地址来回填项目地址；找不到填 ""。
+      结构化输入兜底（JSON + description）：
+      - 若输入文本本身是 JSON，且存在 description 对各字段含义的说明：当无法找到明确的“项目所在地/建设地点”等地址字段时，
+        请根据 description 指明的“项目省/市/区县”（字段名不固定，可能分别映射到 projectProvince/projectCity/projectDistrict）
+        将省/市/区县按顺序拼接成最小可解析地址（例如："西藏自治区林芝市波密县"）填入 projectAddressDetail（不要猜街道门牌）。
+      - 禁止从正文内容字段（例如 detail/announcementContent/公告正文）中的“送货地址/交货地址/履约地点”等回填项目地址。
 
   - key: deliveryCountry
     name: 交货国家
@@ -185,6 +195,9 @@ fields:
     hint: |
       从详情页提取到的“交货地点/履约地点/服务地点/供货地点/收货地址”等交付相关地址（全地址文本），用于后续解析国家/省/市/区。
       注意：不要使用采购单位/代理机构地址来回填交货地址；找不到填 ""。
+      结构化输入兜底（JSON + description）：
+      - 若输入文本本身是 JSON，且存在 description 对各字段含义的说明：当无法找到明确的“交货/履约/收货”详细地址字段时，
+        可根据 description 指明的交付省/市/区县字段（字段名不固定）拼接成最小可解析地址填入 deliveryAddressDetail（不要猜街道门牌）。
 
   - key: buyerName
     name: 采购单位
