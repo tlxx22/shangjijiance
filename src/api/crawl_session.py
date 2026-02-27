@@ -40,6 +40,7 @@ class CrawlSession:
         headless: bool = True,
         date_start: str | None = None,
         date_end: str | None = None,
+        product_category_table: str | None = None,
         engineering_machinery_only: bool = False,
     ):
         """
@@ -60,6 +61,7 @@ class CrawlSession:
                 headless,
                 date_start,
                 date_end,
+                product_category_table,
                 engineering_machinery_only,
             )
         )
@@ -73,6 +75,7 @@ class CrawlSession:
         headless: bool,
         date_start: str | None,
         date_end: str | None,
+        product_category_table: str | None,
         engineering_machinery_only: bool,
     ):
         """
@@ -108,6 +111,7 @@ class CrawlSession:
                 on_item_saved=on_item_saved,
                 date_start=date_start,
                 date_end=date_end,
+                product_category_table=product_category_table,
                 engineering_machinery_only=engineering_machinery_only,
             )
             

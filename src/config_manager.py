@@ -138,7 +138,12 @@ def load_extract_fields(fields_path: str = "extract_fields.yaml", stage: str | N
 	return fields
 
 
-def generate_extract_prompt(fields: List[ExtractField], stage: str) -> str:
+def generate_extract_prompt(
+	fields: List[ExtractField],
+	stage: str,
+	*,
+	product_category_table: str | None = None,
+) -> str:
 	"""
 	根据字段定义生成提取提示词
 
@@ -177,7 +182,7 @@ def generate_extract_prompt(fields: List[ExtractField], stage: str) -> str:
 		lines.append("")
 		lines.append("**具体产品表（用于 productCategory 匹配）**")
 		from .concrete_product_table import format_concrete_product_table_for_prompt
-		lines.append(format_concrete_product_table_for_prompt())
+		lines.append(format_concrete_product_table_for_prompt(product_category_table))
 		lines.append("")
 
 	for i, field in enumerate(fields, 1):

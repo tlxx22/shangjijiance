@@ -46,6 +46,7 @@
   "date_start": "2026-01-01",
   "date_end": "2026-01-31",
   "category": "fuwu",
+  "productCategoryTable": "挖机、液压挖掘机\n汽车起重机、越野起重机",
   "engineering_machinery_only": false,
   "timeout_seconds": 1200,
   "max_pages": 3
@@ -64,6 +65,7 @@
 | date_start | string | ✅ | 筛选开始日期，格式 YYYY-MM-DD |
 | date_end | string | ✅ | 筛选结束日期，格式 YYYY-MM-DD |
 | category | string | ✅ | 分类（对应 prompts/ 目录下的模板名） |
+| productCategoryTable | string | ❌ | 可选：具体产品匹配表（raw string）。存在时覆盖默认“具体产品表”，注入到 lotProducts.productCategory 的匹配提示词中；不传则使用内置表。 |
 | engineering_machinery_only | boolean | ❌ | 是否仅保留工程机械类公告（默认 false；在详情页基于 projectName 做二次判定，不符合则跳过不落盘/不返回 SSE item） |
 | timeout_seconds | integer | ❌ | 超时时间（默认 1200s） |
 | max_pages | integer | ❌ | 最大翻页数（默认 3） |
@@ -334,12 +336,14 @@ curl -X POST http://localhost:8000/embedding \
 
 ```json
 {
-  "sourceJson": "{\"foo\": 1, \"bar\": \"...\"}"
+  "sourceJson": "{\"foo\": 1, \"bar\": \"...\"}",
+  "productCategoryTable": "挖机、液压挖掘机\n汽车起重机、越野起重机"
 }
 ```
 
 说明：
 - `sourceJson` 是其它来源数据的 JSON 字符串（可包含嵌套结构）
+- `productCategoryTable` 可选：具体产品匹配表（raw string）。存在时覆盖默认“具体产品表”，注入到 lotProducts.productCategory 的匹配提示词中；不传则使用内置表。
 - 路由：同字段抽取一样由 `trans.py` 的 `ROUTE` 控制（`official`/`sany`）
 
 ### 响应（200）

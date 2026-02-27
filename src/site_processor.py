@@ -277,6 +277,7 @@ async def process_site(
 	on_item_saved=None,
 	date_start: str | None = None,
 	date_end: str | None = None,
+	product_category_table: str | None = None,
 	engineering_machinery_only: bool = False,
 ) -> Dict:
 	"""
@@ -475,6 +476,7 @@ async def process_site(
 				on_item_saved=on_item_saved,
 				date_start=date_start,
 				date_end=date_end,
+				product_category_table=product_category_table,
 				engineering_machinery_only=engineering_machinery_only,
 			)
 			total_items = result.get("items_found", 0)

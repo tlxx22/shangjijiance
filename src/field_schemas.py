@@ -16,7 +16,6 @@ from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field, RootModel, AliasChoices, field_validator, model_validator
 
 from .logger_config import get_logger
-from .concrete_product_table import match_concrete_product_from_subject, normalize_concrete_product_name
 
 logger = get_logger()
 
@@ -575,12 +574,6 @@ class LotProducts(RootModel[list[LotProduct]]):
 			for idx in range(row_count):
 				subject_value = _pick(subjects, idx)
 				product_category_value = _pick(product_categories, idx)
-				if product_category_value:
-					product_category_value = normalize_concrete_product_name(product_category_value) or match_concrete_product_from_subject(
-						subject_value
-					)
-				else:
-					product_category_value = match_concrete_product_from_subject(subject_value)
 
 				out.append(
 					{

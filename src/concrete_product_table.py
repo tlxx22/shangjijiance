@@ -109,14 +109,24 @@ CONCRETE_PRODUCT_ALIASES_BY_LENGTH: list[str] = sorted(
 )
 
 
-def format_concrete_product_table_for_prompt() -> str:
+def format_concrete_product_table_for_prompt(raw_table: str | None = None) -> str:
 	"""
 	用于提示词展示的“具体产品表”。
 
 	每行第一个词为标准名称（建议 `productCategory` 填写该值）。
 	"""
+	table = CONCRETE_PRODUCT_TABLE
+	if raw_table is not None:
+		text = str(raw_table).strip()
+		if text:
+			try:
+				parsed = _parse_table(text)
+				table = parsed or CONCRETE_PRODUCT_TABLE
+			except Exception:
+				table = CONCRETE_PRODUCT_TABLE
+
 	lines: list[str] = []
-	for row in CONCRETE_PRODUCT_TABLE:
+	for row in table:
 		if not row:
 			continue
 		lines.append(f"- {row[0]}：{'、'.join(row)}")

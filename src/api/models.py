@@ -27,6 +27,10 @@ class CrawlRequest(BaseModel):
     date_start: date
     date_end: date
     category: constr(min_length=1)
+    productCategoryTable: str | None = Field(
+        default=None,
+        description="可选：具体产品匹配表（raw string）。存在时用于覆盖默认“具体产品表”，并注入到 lotProducts.productCategory 的匹配提示词中。",
+    )
     engineering_machinery_only: bool = Field(
         default=False,
         description="是否仅保留工程机械类公告（在详情页 flat 提取后基于 projectName 再做一次 LLM 判定；不符合则跳过不落盘/不返回 SSE item）",
@@ -68,6 +72,10 @@ class MarkdownResponse(BaseModel):
 class NormalizeItemRequest(BaseModel):
     """任意来源 JSON 映射到统一模板的请求"""
     sourceJson: constr(min_length=1) = Field(description="其它来源的数据 JSON（由后端拼接成字符串传入）")
+    productCategoryTable: str | None = Field(
+        default=None,
+        description="可选：具体产品匹配表（raw string）。存在时用于覆盖默认“具体产品表”，并注入到 lotProducts.productCategory 的匹配提示词中。",
+    )
 
 
 class NormalizeItemResponse(BaseModel):

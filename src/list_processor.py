@@ -109,6 +109,7 @@ async def process_entire_site(
 	on_item_saved=None,
 	date_start: str | None = None,
 	date_end: str | None = None,
+	product_category_table: str | None = None,
 	engineering_machinery_only: bool = False,
 ) -> Dict:
 	"""
@@ -184,6 +185,7 @@ async def process_entire_site(
 		on_item_saved=_on_item_saved_wrapped,
 		list_tab_target_id=str(list_tab_target_id) if list_tab_target_id else None,
 		list_url=str(list_url) if list_url else None,
+		product_category_table=product_category_table,
 		engineering_machinery_only=engineering_machinery_only,
 	)
 
@@ -439,6 +441,7 @@ async def process_all_page_items(
 		llm=llm,
 		list_tab_target_id=str(list_tab_target_id) if list_tab_target_id else None,
 		list_url=str(list_url) if list_url else None,
+		product_category_table=product_category_table,
 	)
 
 	# 构建日期筛选指令（仅第一页）

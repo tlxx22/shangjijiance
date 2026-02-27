@@ -216,7 +216,11 @@ Rules:
 	return _unescape_md_control_sequences(md)
 
 
-async def normalize_source_json_to_item(source_json: str) -> dict[str, Any]:
+async def normalize_source_json_to_item(
+	source_json: str,
+	*,
+	product_category_table: str | None = None,
+) -> dict[str, Any]:
 	"""
 	Map arbitrary source JSON/text into our unified item template using the SAME 2-stage extraction as /crawl:
 	- stage=flat: flat fields
@@ -230,7 +234,12 @@ async def normalize_source_json_to_item(source_json: str) -> dict[str, Any]:
 		return template
 
 	flat_fields = await _extract_normalize_item_meta_flat(src)
-	lots_fields = await extract_fields_from_html(src, site_name="normalize_item", stage="lots")
+	lots_fields = await extract_fields_from_html(
+		src,
+		site_name="normalize_item",
+		stage="lots",
+		product_category_table=product_category_table,
+	)
 
 	merged = dict(template)
 	merged.update(flat_fields or {})

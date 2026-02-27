@@ -176,6 +176,7 @@ async def crawl(request: CrawlRequest, http_request: Request):
                     headless=request.headless,
                     date_start=str(request.date_start),
                     date_end=str(request.date_end),
+                    product_category_table=request.productCategoryTable,
                     engineering_machinery_only=request.engineering_machinery_only,
                 )
                 async for chunk in event_generator(
@@ -292,7 +293,10 @@ async def normalize_item(http_request: Request):
             payload = {"sourceJson": text_fallback}
 
         req = NormalizeItemRequest.model_validate(payload)
-        item = await normalize_source_json_to_item(req.sourceJson)
+        item = await normalize_source_json_to_item(
+            req.sourceJson,
+            product_category_table=req.productCategoryTable,
+        )
 
         # 地址字段：不再用正则拆分；改为一次调用 LLM 从三组 AddressDetail 提取 12 个字段。
         # 规则：

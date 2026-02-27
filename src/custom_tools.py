@@ -758,13 +758,22 @@ def get_extract_fields(stage: str) -> list:
 	return _extract_fields_cache[stage]
 
 
-def get_extract_prompt(stage: str) -> str:
+def get_extract_prompt(stage: str, *, product_category_table: str | None = None) -> str:
 	"""
 	获取字段提取提示词（按 stage 缓存）
 	"""
 	global _extract_prompt_cache
 
 	stage = (stage or "").strip() or "flat"
+	product_category_table = (product_category_table or "").strip() or None
+	if product_category_table:
+		# Per-request prompt override: do NOT cache to avoid cross-request leakage.
+		fields = get_extract_fields(stage)
+		return (
+			generate_extract_prompt(fields, stage=stage, product_category_table=product_category_table)
+			if fields
+			else ""
+		)
 	if stage not in _extract_prompt_cache:
 		fields = get_extract_fields(stage)
 		_extract_prompt_cache[stage] = generate_extract_prompt(fields, stage=stage) if fields else ""
@@ -772,7 +781,14 @@ def get_extract_prompt(stage: str) -> str:
 	return _extract_prompt_cache[stage]
 
 
-async def extract_fields_from_page(browser_session, llm, site_name: str, stage: str) -> dict:
+async def extract_fields_from_page(
+	browser_session,
+	llm,
+	site_name: str,
+	stage: str,
+	*,
+	product_category_table: str | None = None,
+) -> dict:
 	"""
 	使用 Agent 从当前详情页提取字段（V2）
 
@@ -786,7 +802,7 @@ async def extract_fields_from_page(browser_session, llm, site_name: str, stage: 
 		提取的字段字典（已归一化），提取失败返回空值字典
 	"""
 	stage = (stage or "").strip() or "flat"
-	extract_prompt = get_extract_prompt(stage)
+	extract_prompt = get_extract_prompt(stage, product_category_table=product_category_table)
 	fields = get_extract_fields(stage)
 
 	# 如果没有配置字段，返回空字典
@@ -1042,13 +1058,19 @@ def _sanitize_html_for_extraction(html: str, *, site_name: str, max_chars: int =
 	return clean.strip()
 
 
-async def extract_fields_from_html(html: str, *, site_name: str, stage: str) -> dict:
+async def extract_fields_from_html(
+	html: str,
+	*,
+	site_name: str,
+	stage: str,
+	product_category_table: str | None = None,
+) -> dict:
 	"""
 	Use DeepSeek-V3.2 (OpenAI protocol via SiliconFlow/SANY gateway) to extract fields from a single HTML blob.
 	Only replaces the *detail field extraction* step; navigation still uses browser-use model.
 	"""
 	stage = (stage or "").strip() or "flat"
-	extract_prompt = get_extract_prompt(stage)
+	extract_prompt = get_extract_prompt(stage, product_category_table=product_category_table)
 	fields = get_extract_fields(stage)
 	if not extract_prompt or not fields:
 		return {}
@@ -1744,6 +1766,7 @@ def create_save_detail_tools(
 	*,
 	list_tab_target_id: str | None = None,
 	list_url: str | None = None,
+	product_category_table: str | None = None,
 	engineering_machinery_only: bool = False,
 ) -> Tools:
 	"""
@@ -1768,6 +1791,7 @@ def create_save_detail_tools(
 	tools = Tools()
 	seen_detail_keys: set[str] = set()
 	_engineering_machinery_only = bool(engineering_machinery_only)
+	_product_category_table = (product_category_table or "").strip() or None
 	# 列表页 tab（用于保存后自动关闭详情页并切回列表页）
 	_locked_list_target_id: str | None = list_tab_target_id
 	_locked_list_url: str | None = (list_url or "").strip() or None
@@ -2001,7 +2025,11 @@ def create_save_detail_tools(
 			lot_fields: dict = {"lotProducts": [], "lotCandidates": []}
 			# 字段提取改用 DeepSeek-V3.2：将详情页正文 HTML 作为整体输入，让模型一次性解析输出字段 JSON
 			# 仅替换“字段提取”步骤；页面操作/导航仍然由 browser-use Agent 完成。
-			flat_fields = await extract_fields_from_html(announcement_content, site_name=site_name, stage="flat")
+			flat_fields = await extract_fields_from_html(
+				announcement_content,
+				site_name=site_name,
+				stage="flat",
+			)
 			flat_fields.pop("updateDate", None)
 
 			# 5.1 工程机械类二次筛选（基于 flat 提取到的 projectName）
@@ -2034,7 +2062,12 @@ def create_save_detail_tools(
 							+ (f" reason={reason}" if reason else "")
 						)
 
-			lot_fields = await extract_fields_from_html(announcement_content, site_name=site_name, stage="lots")
+			lot_fields = await extract_fields_from_html(
+				announcement_content,
+				site_name=site_name,
+				stage="lots",
+				product_category_table=_product_category_table,
+			)
 
 			# 兜底：确保数组字段存在
 			lot_products = lot_fields.get("lotProducts") or []
