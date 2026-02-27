@@ -41,5 +41,6 @@ shangjijiance-api.tar
 
 # 测试文件
 test*.py
+!test_official_startup_notify.py
 test*.json
 resp.json

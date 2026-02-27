@@ -228,6 +228,7 @@ with requests.post(url, json=payload, stream=True) as r:
     - `FEISHU_BUDGET_ALERT_WEBHOOK_URL`：机器人 webhook 地址
     - `FEISHU_BUDGET_ALERT_WEBHOOK_SECRET`：可选，安全密钥（签名）
     - `FEISHU_BUDGET_ALERT_AT_ALL`：可选，是否 @所有人（true/1 开启）
+- **三一正式环境启动通知**：当 `environment=sany_official` 且使用 `gunicorn -c gunicorn.conf.py app:app` 启动时，Gunicorn master 会向固定飞书群发送一次“启动通知”（webhook 写死在代码中）
 - **结束判断**：收到 `type=done` 或 `type=error` 即结束；若未收到就断开则视为失败/取消
 - **超时**：默认 1200s，超时后发送 `type=error` 并断开
 - **心跳**：30s 无任何输出才发送，用于保持连接
