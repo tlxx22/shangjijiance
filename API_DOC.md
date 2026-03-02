@@ -125,7 +125,7 @@ data: {"type":"item","request_id":"a1b2c3d4","data":{"dataId":"<sha256>","announ
 - `lotCandidates[].candidatePrices` 单位为“元”；类型为 number；取不到/不合法填 `null`
 - `lotProducts[].unitPrices` 单位为“元”；类型为 number；取不到/不合法填 `null`
 - `lotProducts[].quantityUnit` 为数量单位（如 `台/套/个`），取不到填 `""`
-- `estimatedAmount` 仅当公告类型为“招标/候选”时才会输出；格式可为 `"下限~上限"` 或单一金额字符串（均为元）；取不到填 `""`
+- `estimatedAmount` 仅当公告类型为“招标/询价/竞谈/单一/竞价/邀标”时才可能为非空；格式可为 `"下限~上限"` 或单一金额字符串（均为元）；取不到填 `""`
 - 地址字段已拆分为 3 组 * 5 个扁平字段（取不到填 `""`；`*Country` 默认为 `"中国"`）：
   - `buyerCountry/buyerProvince/buyerCity/buyerDistrict/buyerAddressDetail`
   - `projectCountry/projectProvince/projectCity/projectDistrict/projectAddressDetail`

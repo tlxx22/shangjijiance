@@ -1091,10 +1091,16 @@ No markdown, no code fences, no extra text.
 Rules:
 - Fill missing fields with the correct empty value by type (string=\"\", number=null, array=[]).
 - Special rule for estimatedAmount:
-  - If announcementType is 招标 or 候选, you MUST output a non-empty amount estimate (yuan) as either \"number\" or \"lo~hi\".
+  - Only output estimatedAmount when announcementType is one of: 招标 / 询价 / 竞谈 / 单一 / 竞价 / 邀标. For other types, output empty string.
+  - Priority (high -> low):
+    1) If there is an explicit awarded/winning/transaction amount in the input (e.g. 中标金额/成交金额/定标金额/授标金额),
+       set estimatedAmount to that amount in yuan as a single number string (no commas).
+       Prefer the winning supplier's amount; if missing, use the first candidate's bid price as fallback.
+    2) Otherwise, if procurement items / BOQ / service scope exist (标的物/采购清单/服务范围),
+       estimate a reasonable amount in yuan as either a single number string or a range \"lo~hi\".
+    3) Otherwise output empty string (do not guess).
   - The estimate MUST be derived mainly from the procurement items (标的物), quantities, specs, service scope, and similar signals.
     Do NOT use irrelevant fees (e.g. document price, service fee, deposit, CA/platform fees) as the estimate.
-  - If announcementType is NOT 招标/候选, you MUST output empty string for estimatedAmount.
 - Money amounts are in 单位“元” (convert 万/亿 to 元 if needed).
 - Dates are YYYY-MM-DD.
 """.strip()
@@ -2128,11 +2134,11 @@ def create_save_detail_tools(
 
 			result_data["announcementType"] = normalized_type
 
-			# estimatedAmount：仅当公告类型为【招标/候选】时才保留（由抽取阶段 DeepSeek 结合全文生成）。
+			# estimatedAmount：仅当公告类型为【招标/询价/竞谈/单一/竞价/邀标】时才保留（由抽取阶段 DeepSeek 结合全文生成）。
 			# 本阶段只做：类型 gating + 正则校验（不做任何兜底/推导/再调用）。
 			try:
 				atype = (result_data.get("announcementType") or "").strip()
-				if atype not in {"招标", "候选"}:
+				if atype not in {"招标", "询价", "竞谈", "单一", "竞价", "邀标"}:
 					result_data["estimatedAmount"] = ""
 				else:
 					est_text = str(result_data.get("estimatedAmount") or "").strip()
