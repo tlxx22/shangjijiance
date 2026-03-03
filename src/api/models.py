@@ -70,8 +70,8 @@ class MarkdownResponse(BaseModel):
 
 
 class NormalizeItemRequest(BaseModel):
-    """任意来源 JSON 映射到统一模板的请求"""
-    sourceJson: constr(min_length=1) = Field(description="其它来源的数据 JSON（由后端拼接成字符串传入）")
+    """任意来源文本/Markdown 映射到统一模板的请求"""
+    sourceJson: constr(min_length=1) = Field(description="其它来源的数据文本（推荐：中文标签的 Markdown；由后端拼接成字符串传入）")
     productCategoryTable: str | None = Field(
         default=None,
         description="可选：具体产品匹配表（raw string）。存在时用于覆盖默认“具体产品表”，并注入到 lotProducts.productCategory 的匹配提示词中。",
@@ -79,5 +79,5 @@ class NormalizeItemRequest(BaseModel):
 
 
 class NormalizeItemResponse(BaseModel):
-    """任意来源 JSON 映射到统一模板的响应"""
+    """任意来源文本/Markdown 映射到统一模板的响应"""
     data: dict = Field(description="统一 item 模板 JSON")

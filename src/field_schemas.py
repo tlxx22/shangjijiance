@@ -232,18 +232,57 @@ def normalize_estimated_amount(v: Any) -> str:
 	if not s or s.lower() in _EMPTY_STRINGS:
 		return ""
 
-	s = s.replace("～", "~")
-	parts = [p.strip() for p in s.split("~") if p.strip()]
-	if len(parts) != 2:
-		# Allow single amount (e.g. "100万") and normalize it to yuan string when possible.
-		single = _to_yuan_str(s)
-		return single if single is not None else s
+	def _detect_unit(text: str) -> str:
+		# precedence matters: "亿元" contains both "亿" and "元"
+		if "亿" in text:
+			return "亿"
+		if "万" in text:
+			return "万"
+		if "元" in text:
+			return "元"
+		return ""
 
-	lo = _to_yuan_str(parts[0])
-	hi = _to_yuan_str(parts[1])
-	if lo is None or hi is None:
-		return s
-	return f"{lo}~{hi}"
+	def _share_unit(lo_raw: str, hi_raw: str) -> tuple[str, str]:
+		lo_u = _detect_unit(lo_raw)
+		hi_u = _detect_unit(hi_raw)
+		if not lo_u and hi_u:
+			return f"{lo_raw}{hi_u}", hi_raw
+		if lo_u and not hi_u:
+			return lo_raw, f"{hi_raw}{lo_u}"
+		return lo_raw, hi_raw
+
+	def _split_range(text: str) -> tuple[str, str] | None:
+		# Normalize common range separators.
+		t = text.replace("～", "~").replace("－", "-").replace("—", "-").replace("–", "-")
+		if "~" not in t:
+			t = t.replace("至", "~").replace("到", "~")
+
+		if "~" in t:
+			parts = [p.strip() for p in t.split("~") if p.strip()]
+			if len(parts) == 2:
+				return parts[0], parts[1]
+			return None
+
+		# Dash range: only treat as range when there's exactly one dash and not a date-like string.
+		if t.count("-") == 1 and not re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", t):
+			lo_raw, hi_raw = [p.strip() for p in t.split("-", 1)]
+			if any(ch.isdigit() for ch in lo_raw) and any(ch.isdigit() for ch in hi_raw):
+				return lo_raw, hi_raw
+
+		return None
+
+	range_parts = _split_range(s)
+	if range_parts:
+		lo_raw, hi_raw = _share_unit(range_parts[0], range_parts[1])
+		lo = _to_yuan_str(lo_raw)
+		hi = _to_yuan_str(hi_raw)
+		if lo is not None and hi is not None:
+			return f"{lo}~{hi}"
+
+	# Always return a range string when we can parse a single amount.
+	# If only one amount is known, normalize to "x~x" (still a valid range).
+	single = _to_yuan_str(s)
+	return f"{single}~{single}" if single is not None else s
 
 
 def normalize_date_ymd(v: Any) -> str:

@@ -23,7 +23,7 @@ class ExtractField(BaseModel):
 	key: str  # 字段键名（英文）
 	name: str  # 字段中文名
 	type: str = "string"  # 类型: string, number, boolean, array
-	stage: str = "flat"  # 分组: flat | lots
+	stage: str = "meta"  # 分组: meta | contacts | address_detail | lots | address_admin
 	required: bool = False  # 是否必填（用于 prompt 强约束）
 	enum: list[str] | None = None  # 枚举值（用于 prompt 强约束）
 	hint: str = ""  # 提取提示
@@ -112,7 +112,7 @@ def load_extract_fields(fields_path: str = "extract_fields.yaml", stage: str | N
 
 	Args:
 		fields_path: 字段配置文件路径
-		stage: 可选，按 stage 过滤（flat/lots）
+		stage: 可选，按 stage 过滤（meta/contacts/address_detail/lots/address_admin）
 
 	Returns:
 		字段定义列表（可按 stage 过滤）
@@ -149,12 +149,12 @@ def generate_extract_prompt(
 
 	Args:
 		fields: 字段定义列表
-		stage: flat / lots
+		stage: meta / contacts / address_detail / lots / address_admin
 
 	Returns:
 		提取提示词字符串
 	"""
-	lines = ["从当前详情页提取以下字段，返回 JSON：", ""]
+	lines = ["从输入内容中提取以下字段，返回 JSON：", ""]
 
 	lines.append("**类型与空值规则：**")
 	lines.append('- string: 找不到填 ""')
@@ -164,11 +164,24 @@ def generate_extract_prompt(
 	lines.append("- JSON 必须严格合法：key 必须使用双引号（\"\"），不能用单引号，不能省略引号")
 	lines.append("")
 
-	if stage == "flat":
+	if stage == "meta":
 		lines.append("**额外规则：**")
 		lines.append("- 金额字段单位为“元”，无单位数字视为元；如带“万/亿”，请换算成元（小数位数尽量与页面一致）")
 		lines.append("- 日期字段统一为 YYYY-MM-DD")
 		lines.append("- 公告类别必须从枚举中选择一个")
+		lines.append("")
+	elif stage == "contacts":
+		lines.append("**额外规则：**")
+		lines.append("- 仅提取页面/输入中【明确标注】的单位/联系人/电话/邮箱；找不到填空值，不要编造")
+		lines.append("- 注意区分：不要把地址/项目地点当成联系人或单位名称")
+		lines.append("")
+	elif stage == "address_detail":
+		lines.append("**额外规则：**")
+		lines.append("- 本阶段只提取三组详细地址（buyer/project/deliveryAddressDetail）原文字符串")
+		lines.append("- 严禁把采购单位/代理机构地址回填到项目地址或交货地址")
+		lines.append(
+			"- 若缺少街道门牌等详细地址，但输入中有【明确给出】的省/市/区县信息，允许按“省→市→区县”拼接成最小 AddressDetail；否则填 \"\"（不要猜）"
+		)
 		lines.append("")
 	elif stage == "lots":
 		lines.append("**额外规则：**")
@@ -177,7 +190,9 @@ def generate_extract_prompt(
 		lines.append("- 严禁把项目编号/招标编号/公告编号（如 CEZB****）填到 lotNumber")
 		lines.append("- lotProducts：每个元素表示一条“标的物行”；其中 unitPrices 为 number(元) 或 null，其余如 subjects/models/quantities/productCategory 为 string；如有多条标的物，输出多个元素（可复用相同 lotNumber/lotName）")
 		lines.append("- lotCandidates：每个元素表示一条“单位行”，包含 type（中标/中标候选人/非中标候选人）+ candidates(string) + candidatePrices(number(元) 或 null)；如有多行，输出多个元素")
-		lines.append("- unitPrices/candidatePrices 单位为“元”；如果无法解析为单一金额（如范围/多个值/非金额文本），请返回 null（不要编造）")
+		lines.append(
+			"- unitPrices/candidatePrices 单位为“元”；如页面为“万/亿”，必须换算成“元”；如果无法解析为单一金额（如范围/多个值/非金额文本），请返回 null（不要编造）"
+		)
 		lines.append("- productCategory：按“具体产品表”匹配 subjects，匹配到则填该行的标准名称（每行第一个词），匹配不到填 \"\"")
 		lines.append("")
 		lines.append("**具体产品表（用于 productCategory 匹配）**")

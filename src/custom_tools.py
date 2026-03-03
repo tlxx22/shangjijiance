@@ -482,7 +482,7 @@ from browser_use.tools.service import Tools
 from .config_manager import load_extract_fields, generate_extract_prompt
 from .prompts import GLOBAL_RULES
 from .address_normalizer import extract_admin_divisions_from_details
-from .deepseek_langchain import invoke_structured
+from .deepseek_langchain import invoke_structured, ainvoke_structured
 from .structured_schemas import build_extract_fields_model
 from .field_schemas import (
 	LotProducts,
@@ -492,12 +492,41 @@ from .field_schemas import (
 	normalize_date_ymd,
 	normalize_estimated_amount,
 )
+from .estimated_amount_policy import apply_estimated_amount_policy
 from .announcement_type_repair import repair_announcement_type
 
 
 # 全局缓存字段配置和提示词（避免每次调用都读取文件）
-_extract_fields_cache: dict[str, list] = {}
-_extract_prompt_cache: dict[str, str] = {}
+# cache key: (fields_path, stage)
+_extract_fields_cache: dict[tuple[str, str], list] = {}
+_extract_prompt_cache: dict[tuple[str, str], str] = {}
+
+
+def _normalize_extract_stage(stage: str) -> str:
+	"""
+	Normalize stage names to the new taxonomy.
+
+	Backward compatibility:
+	- "flat" -> "meta"
+	- empty  -> "meta"
+	"""
+	s = (stage or "").strip()
+	if not s:
+		return "meta"
+	if s == "flat":
+		return "meta"
+	return s
+
+
+def _parse_positive_int_env(name: str, default: int) -> int:
+	try:
+		val = int(str(os.getenv(name, "")).strip())
+	except Exception:
+		return default
+	return val if val > 0 else default
+
+
+_EXTRACT_FIELDS_LLM_SEMAPHORE = asyncio.Semaphore(_parse_positive_int_env("EXTRACT_FIELDS_LLM_CONCURRENCY", 4))
 
 
 _CN_PROVINCES = [
@@ -742,43 +771,56 @@ def _unescape_control_chars_outside_strings(text: str) -> str:
 	return "".join(out)
 
 
-def get_extract_fields(stage: str) -> list:
+def get_extract_fields(stage: str, *, fields_path: str = "extract_fields.yaml") -> list:
 	"""
-	获取字段配置列表（按 stage 缓存）
+	获取字段配置列表（按 fields_path+stage 缓存）
 	"""
 	global _extract_fields_cache
 
-	stage = (stage or "").strip() or "flat"
-	if stage not in _extract_fields_cache:
+	stage = _normalize_extract_stage(stage)
+	fields_path = (fields_path or "extract_fields.yaml").strip() or "extract_fields.yaml"
+	cache_key = (fields_path, stage)
+	if cache_key not in _extract_fields_cache:
 		try:
-			_extract_fields_cache[stage] = load_extract_fields(stage=stage)
+			_extract_fields_cache[cache_key] = load_extract_fields(fields_path=fields_path, stage=stage)
 		except FileNotFoundError:
-			_extract_fields_cache[stage] = []
+			_extract_fields_cache[cache_key] = []
 
-	return _extract_fields_cache[stage]
+	return _extract_fields_cache[cache_key]
 
 
-def get_extract_prompt(stage: str, *, product_category_table: str | None = None) -> str:
+def get_extract_prompt(
+	stage: str,
+	*,
+	fields_path: str = "extract_fields.yaml",
+	product_category_table: str | None = None,
+) -> str:
 	"""
-	获取字段提取提示词（按 stage 缓存）
+	获取字段提取提示词（按 fields_path+stage 缓存）
 	"""
 	global _extract_prompt_cache
 
-	stage = (stage or "").strip() or "flat"
+	stage = _normalize_extract_stage(stage)
+	fields_path = (fields_path or "extract_fields.yaml").strip() or "extract_fields.yaml"
+	cache_key = (fields_path, stage)
+
+	# Only lots stage supports per-request product category table injection.
+	if stage != "lots":
+		product_category_table = None
 	product_category_table = (product_category_table or "").strip() or None
 	if product_category_table:
 		# Per-request prompt override: do NOT cache to avoid cross-request leakage.
-		fields = get_extract_fields(stage)
+		fields = get_extract_fields(stage, fields_path=fields_path)
 		return (
 			generate_extract_prompt(fields, stage=stage, product_category_table=product_category_table)
 			if fields
 			else ""
 		)
-	if stage not in _extract_prompt_cache:
-		fields = get_extract_fields(stage)
-		_extract_prompt_cache[stage] = generate_extract_prompt(fields, stage=stage) if fields else ""
+	if cache_key not in _extract_prompt_cache:
+		fields = get_extract_fields(stage, fields_path=fields_path)
+		_extract_prompt_cache[cache_key] = generate_extract_prompt(fields, stage=stage) if fields else ""
 
-	return _extract_prompt_cache[stage]
+	return _extract_prompt_cache[cache_key]
 
 
 async def extract_fields_from_page(
@@ -787,6 +829,7 @@ async def extract_fields_from_page(
 	site_name: str,
 	stage: str,
 	*,
+	fields_path: str = "extract_fields.yaml",
 	product_category_table: str | None = None,
 ) -> dict:
 	"""
@@ -796,14 +839,14 @@ async def extract_fields_from_page(
 		browser_session: 浏览器会话
 		llm: LLM 实例
 		site_name: 网站名称
-		stage: flat / lots
+		stage: meta / contacts / address_detail / lots
 
 	Returns:
 		提取的字段字典（已归一化），提取失败返回空值字典
 	"""
-	stage = (stage or "").strip() or "flat"
-	extract_prompt = get_extract_prompt(stage, product_category_table=product_category_table)
-	fields = get_extract_fields(stage)
+	stage = _normalize_extract_stage(stage)
+	extract_prompt = get_extract_prompt(stage, fields_path=fields_path, product_category_table=product_category_table)
+	fields = get_extract_fields(stage, fields_path=fields_path)
 
 	# 如果没有配置字段，返回空字典
 	if not extract_prompt or not fields:
@@ -1063,15 +1106,20 @@ async def extract_fields_from_html(
 	*,
 	site_name: str,
 	stage: str,
+	fields_path: str = "extract_fields.yaml",
 	product_category_table: str | None = None,
 ) -> dict:
 	"""
 	Use DeepSeek-V3.2 (OpenAI protocol via SiliconFlow/SANY gateway) to extract fields from a single HTML blob.
 	Only replaces the *detail field extraction* step; navigation still uses browser-use model.
 	"""
-	stage = (stage or "").strip() or "flat"
-	extract_prompt = get_extract_prompt(stage, product_category_table=product_category_table)
-	fields = get_extract_fields(stage)
+	stage = _normalize_extract_stage(stage)
+	extract_prompt = get_extract_prompt(
+		stage,
+		fields_path=fields_path,
+		product_category_table=product_category_table,
+	)
+	fields = get_extract_fields(stage, fields_path=fields_path)
 	if not extract_prompt or not fields:
 		return {}
 
@@ -1079,6 +1127,8 @@ async def extract_fields_from_html(
 	empty_result = {f.key: TYPE_DEFAULTS.get(f.type, "") for f in fields}
 	if not html:
 		return empty_result
+
+	include_estimated_amount = any(getattr(f, "key", "") == "estimatedAmount" for f in fields)
 
 	system_prompt = f"""
 You are an information extraction engine.
@@ -1089,34 +1139,137 @@ No markdown, no code fences, no extra text.
 {extract_prompt}
 
 Rules:
-- Fill missing fields with the correct empty value by type (string=\"\", number=null, array=[]).
-- Special rule for estimatedAmount:
-  - Only output estimatedAmount when announcementType is one of: 招标 / 询价 / 竞谈 / 单一 / 竞价 / 邀标. For other types, output empty string.
-  - Priority (high -> low):
-    1) If there is an explicit awarded/winning/transaction amount in the input (e.g. 中标金额/成交金额/定标金额/授标金额),
-       set estimatedAmount to that amount in yuan as a single number string (no commas).
-       Prefer the winning supplier's amount; if missing, use the first candidate's bid price as fallback.
-    2) Otherwise, if procurement items / BOQ / service scope exist (标的物/采购清单/服务范围),
-       estimate a reasonable amount in yuan as either a single number string or a range \"lo~hi\".
-    3) Otherwise output empty string (do not guess).
-  - The estimate MUST be derived mainly from the procurement items (标的物), quantities, specs, service scope, and similar signals.
-    Do NOT use irrelevant fees (e.g. document price, service fee, deposit, CA/platform fees) as the estimate.
+- Fill missing fields with the correct empty value by type (string=\"\", number=null, array=[], boolean=false).
 - Money amounts are in 单位“元” (convert 万/亿 to 元 if needed).
 - Dates are YYYY-MM-DD.
 """.strip()
 
+	if include_estimated_amount:
+		system_prompt += (
+			"\n\n"
+			"Special rule for estimatedAmount:\n"
+			"- estimatedAmount MUST be a range string \"lo~hi\" in yuan (both sides are numbers; no commas).\n"
+			"  Do NOT output a single number; if only one amount is known, output \"x~x\".\n"
+			"- Priority (high -> low):\n"
+			"  1) If there is an explicit awarded/winning/transaction amount in the input (e.g. 中标金额/成交金额/定标金额/授标金额),\n"
+			"     set estimatedAmount to that amount as \"x~x\".\n"
+			"     Prefer the winning supplier's amount; if missing, use the first winning-candidate bid price as fallback.\n"
+			"  2) Otherwise, if procurement items / BOQ / service scope exist (标的物/采购清单/服务范围),\n"
+			"     estimate a reasonable TOTAL amount in yuan as a range \"lo~hi\".\n"
+			"  3) Otherwise output empty string (do not guess).\n"
+			"- The estimate MUST be derived mainly from the procurement items (标的物), quantities, specs, service scope, and similar signals.\n"
+			"  Do NOT use irrelevant fees (e.g. document price, service fee, deposit, CA/platform fees) as the estimate.\n"
+		)
+
 	user_prompt = f"HTML:\\n{html}"
 
 	try:
-		Schema = build_extract_fields_model(fields, model_name=f"ExtractFields_{stage}")
-		result = await asyncio.to_thread(
-			invoke_structured,
-			[
-				{"role": "system", "content": system_prompt},
-				{"role": "user", "content": user_prompt},
-			],
-			Schema,
+		Schema = build_extract_fields_model(fields, model_name=f"ExtractFields_{Path(fields_path).stem}_{stage}")
+		async with _EXTRACT_FIELDS_LLM_SEMAPHORE:
+			result = await ainvoke_structured(
+				[
+					{"role": "system", "content": system_prompt},
+					{"role": "user", "content": user_prompt},
+				],
+				Schema,
+			)
+	except Exception as e:
+		logger.warning(f"[{site_name}] DeepSeek 字段提取调用失败（stage={stage}）: {e}")
+		return empty_result
+
+	extracted = result.model_dump() if hasattr(result, "model_dump") else {}
+	normalized: dict = {}
+	for f in fields:
+		raw_value = extracted.get(f.key, TYPE_DEFAULTS.get(f.type, ""))
+		normalized[f.key] = normalize_field_value(f.key, raw_value, f.type)
+
+	logger.info(f"[{site_name}] ✓ 字段提取成功（stage={stage}）")
+	return normalized
+
+
+async def extract_fields_from_text(
+	text: str,
+	*,
+	site_name: str,
+	stage: str,
+	fields_path: str,
+	product_category_table: str | None = None,
+) -> dict:
+	"""
+	Use DeepSeek structured output to extract fields from an unstructured text blob (often JSON mixed with text).
+
+	Notes:
+	- Input is treated as plain text; it does NOT have to be valid JSON.
+	- Used mainly by /normalize_item.
+	"""
+	stage = _normalize_extract_stage(stage)
+	extract_prompt = get_extract_prompt(
+		stage,
+		fields_path=fields_path,
+		product_category_table=product_category_table,
+	)
+	fields = get_extract_fields(stage, fields_path=fields_path)
+	if not extract_prompt or not fields:
+		return {}
+
+	empty_result = {f.key: TYPE_DEFAULTS.get(f.type, "") for f in fields}
+	text = (text or "").strip()
+	if not text:
+		return empty_result
+
+	# Hard cap to avoid extremely large prompts.
+	max_chars = 200_000
+	if len(text) > max_chars:
+		logger.info(f"[{site_name}] TEXT 过长，截断到 {max_chars} 字符用于字段抽取（stage={stage}）")
+		text = text[:max_chars]
+
+	include_estimated_amount = any(getattr(f, "key", "") == "estimatedAmount" for f in fields)
+
+	system_prompt = f"""
+You are an information extraction engine.
+You will be given an unstructured text blob from external bid sources (may be JSON, may be key-value text, may be mixed).
+Extract the requested fields according to the schema below and return ONLY valid JSON.
+No markdown, no code fences, no extra text.
+
+{extract_prompt}
+
+Rules:
+- Treat the input as plain text; do not require it to be valid JSON.
+- The input may be a Markdown document with sections like "### 标题"/"### 正文"/"### 发布时间". Treat section headings as field names and prioritize those sections when present.
+- Fill missing fields with the correct empty value by type (string=\"\", number=null, array=[], boolean=false).
+- Money amounts are in 单位“元” (convert 万/亿 to 元 if needed).
+- Dates are YYYY-MM-DD.
+""".strip()
+
+	if include_estimated_amount:
+		system_prompt += (
+			"\n\n"
+			"Special rule for estimatedAmount:\n"
+			"- estimatedAmount MUST be a range string \"lo~hi\" in yuan (both sides are numbers; no commas).\n"
+			"  Do NOT output a single number; if only one amount is known, output \"x~x\".\n"
+			"- Priority (high -> low):\n"
+			"  1) If there is an explicit awarded/winning/transaction amount in the input (e.g. 中标金额/成交金额/定标金额/授标金额),\n"
+			"     set estimatedAmount to that amount as \"x~x\".\n"
+			"     Prefer the winning supplier's amount; if missing, use the first winning-candidate bid price as fallback.\n"
+			"  2) Otherwise, if procurement items / BOQ / service scope exist (标的物/采购清单/服务范围),\n"
+			"     estimate a reasonable TOTAL amount in yuan as a range \"lo~hi\".\n"
+			"  3) Otherwise output empty string (do not guess).\n"
+			"- The estimate MUST be derived mainly from the procurement items (标的物), quantities, specs, service scope, and similar signals.\n"
+			"  Do NOT use irrelevant fees (e.g. document price, service fee, deposit, CA/platform fees) as the estimate.\n"
 		)
+
+	user_prompt = f"SOURCE_TEXT:\\n{text}"
+
+	try:
+		Schema = build_extract_fields_model(fields, model_name=f"ExtractFieldsText_{Path(fields_path).stem}_{stage}")
+		async with _EXTRACT_FIELDS_LLM_SEMAPHORE:
+			result = await ainvoke_structured(
+				[
+					{"role": "system", "content": system_prompt},
+					{"role": "user", "content": user_prompt},
+				],
+				Schema,
+			)
 	except Exception as e:
 		logger.warning(f"[{site_name}] DeepSeek 字段提取调用失败（stage={stage}）: {e}")
 		return empty_result
@@ -1214,9 +1367,6 @@ announcementTitle: {title}""".strip()
 		reason = reason[:200]
 
 	return decision, reason or ""
-
-
-_ESTIMATED_AMOUNT_VALUE_RE = re.compile(r"^\d+(?:\.\d+)?(?:~\d+(?:\.\d+)?)?$")
 
 
 def normalize_field_value(key: str, value: Any, field_type: str):
@@ -2026,22 +2176,22 @@ def create_save_detail_tools(
 					error="提取公告原文失败"
 				)
 
-			# 5. 两次提取：flat + lots（如果提供了 llm）
-			flat_fields: dict = {}
+			# 5. 多 stage 并发提取：meta + contacts + address_detail + lots
+			meta_fields: dict = {}
+			contacts_fields: dict = {}
+			address_detail_fields: dict = {}
 			lot_fields: dict = {"lotProducts": [], "lotCandidates": []}
-			# 字段提取改用 DeepSeek-V3.2：将详情页正文 HTML 作为整体输入，让模型一次性解析输出字段 JSON
-			# 仅替换“字段提取”步骤；页面操作/导航仍然由 browser-use Agent 完成。
-			flat_fields = await extract_fields_from_html(
-				announcement_content,
-				site_name=site_name,
-				stage="flat",
-			)
-			flat_fields.pop("updateDate", None)
 
-			# 5.1 工程机械类二次筛选（基于 flat 提取到的 projectName）
-			# 说明：此处只做“是否属于工程机械类”的判定，不做任何字段抽取；抽取仍然由 extract_fields_from_html 完成。
+			# 5.1 工程机械类二次筛选：需要先拿到 meta.projectName
 			if _engineering_machinery_only:
-				project_name = str(flat_fields.get("projectName") or "").strip()
+				meta_fields = await extract_fields_from_html(
+					announcement_content,
+					site_name=site_name,
+					stage="meta",
+				)
+				meta_fields.pop("updateDate", None)
+
+				project_name = str(meta_fields.get("projectName") or "").strip()
 				if project_name:
 					decision, reason = await llm_is_engineering_machinery_project(
 						project_name,
@@ -2068,12 +2218,50 @@ def create_save_detail_tools(
 							+ (f" reason={reason}" if reason else "")
 						)
 
-			lot_fields = await extract_fields_from_html(
-				announcement_content,
-				site_name=site_name,
-				stage="lots",
-				product_category_table=_product_category_table,
-			)
+				contacts_fields, address_detail_fields, lot_fields = await asyncio.gather(
+					extract_fields_from_html(
+						announcement_content,
+						site_name=site_name,
+						stage="contacts",
+					),
+					extract_fields_from_html(
+						announcement_content,
+						site_name=site_name,
+						stage="address_detail",
+					),
+					extract_fields_from_html(
+						announcement_content,
+						site_name=site_name,
+						stage="lots",
+						product_category_table=_product_category_table,
+					),
+				)
+			else:
+				meta_fields, contacts_fields, address_detail_fields, lot_fields = await asyncio.gather(
+					extract_fields_from_html(
+						announcement_content,
+						site_name=site_name,
+						stage="meta",
+					),
+					extract_fields_from_html(
+						announcement_content,
+						site_name=site_name,
+						stage="contacts",
+					),
+					extract_fields_from_html(
+						announcement_content,
+						site_name=site_name,
+						stage="address_detail",
+					),
+					extract_fields_from_html(
+						announcement_content,
+						site_name=site_name,
+						stage="lots",
+						product_category_table=_product_category_table,
+					),
+				)
+
+			meta_fields.pop("updateDate", None)
 
 			# 兜底：确保数组字段存在
 			lot_products = lot_fields.get("lotProducts") or []
@@ -2092,8 +2280,10 @@ def create_save_detail_tools(
 				"announcementName": title,
 				"announcementContent": announcement_content,
 
-				# LLM 字段
-				**flat_fields,
+				# LLM 字段（按 stage 合并）
+				**(meta_fields or {}),
+				**(contacts_fields or {}),
+				**(address_detail_fields or {}),
 
 				# 标段数组字段（LLM）
 				"lotProducts": lot_products,
@@ -2134,20 +2324,16 @@ def create_save_detail_tools(
 
 			result_data["announcementType"] = normalized_type
 
-			# estimatedAmount：仅当公告类型为【招标/询价/竞谈/单一/竞价/邀标】时才保留（由抽取阶段 DeepSeek 结合全文生成）。
-			# 本阶段只做：类型 gating + 正则校验（不做任何兜底/推导/再调用）。
-			try:
-				atype = (result_data.get("announcementType") or "").strip()
-				if atype not in {"招标", "询价", "竞谈", "单一", "竞价", "邀标"}:
-					result_data["estimatedAmount"] = ""
-				else:
-					est_text = str(result_data.get("estimatedAmount") or "").strip()
-					normalized = normalize_estimated_amount(est_text) if est_text else ""
-					if normalized and not _ESTIMATED_AMOUNT_VALUE_RE.match(normalized):
-						normalized = ""
-					result_data["estimatedAmount"] = normalized
-			except Exception as est_err:
-				logger.warning(f"[{site_name}] estimatedAmount 处理失败（已跳过）: {est_err}")
+			# estimatedAmount：
+			# - 与 announcementType 无关。
+			# - 仅由“中标金额/候选人报价/标的物”决定：
+			#   1) 若有中标金额：直接取中标金额（输出范围 "x~x"）
+			#      - 优先 winnerAmount
+			#      - 其次第一位中标/中标候选人报价（lotCandidates[].candidatePrices）
+			#   2) 若无中标金额但有标的物：保留 LLM 预估价（需为范围 "lo~hi"）
+			#   3) 若无中标金额且无标的物：返回 ""
+			# 本阶段只做：按上述优先级覆盖/清空 + 正则校验（不做任何兜底/推导/再调用）。
+			apply_estimated_amount_policy(result_data)
 
 			# 地址字段：不再用正则拆分；改为一次调用 LLM 从三组 AddressDetail 提取 12 个字段。
 			# 规则：

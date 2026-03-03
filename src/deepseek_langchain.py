@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from functools import lru_cache
 from typing import Any, TypeVar
@@ -127,6 +128,28 @@ def invoke_structured(messages: list[dict[str, str]], schema: type[T], *, model:
 	chat_model = _get_chat_model(model=model)
 	runnable = chat_model.with_structured_output(schema)
 	return runnable.invoke(_to_lc_messages(messages))
+
+
+async def ainvoke_structured(messages: list[dict[str, str]], schema: type[T], *, model: str | None = None) -> T:
+	"""
+	Async variant of invoke_structured().
+
+	Falls back to running invoke() in a thread when the underlying LangChain runnable
+	does not provide ainvoke() (or when async invocation is not implemented).
+	"""
+	chat_model = _get_chat_model(model=model)
+	runnable = chat_model.with_structured_output(schema)
+	lc_messages = _to_lc_messages(messages)
+
+	ainvoke = getattr(runnable, "ainvoke", None)
+	if callable(ainvoke):
+		try:
+			return await ainvoke(lc_messages)
+		except (NotImplementedError, AttributeError):
+			# Fall back to sync invoke in a worker thread.
+			pass
+
+	return await asyncio.to_thread(runnable.invoke, lc_messages)
 
 
 def _structured_output_debug_dict(obj: Any) -> dict[str, Any]:

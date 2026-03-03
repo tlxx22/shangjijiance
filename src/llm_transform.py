@@ -5,17 +5,13 @@ import re
 from typing import Any
 
 from .extract_client import chat_completion
-from .config_manager import load_extract_fields, generate_extract_prompt
-from .custom_tools import extract_fields_from_html, normalize_field_value
-from .deepseek_langchain import invoke_structured
-from .structured_schemas import build_extract_fields_model
+from .config_manager import load_extract_fields
+from .custom_tools import extract_fields_from_text, normalize_field_value
 from .announcement_type_repair import AnnouncementTypeRepairError, repair_announcement_type
+from .estimated_amount_policy import apply_estimated_amount_policy
 from .field_schemas import (
 	ANNOUNCEMENT_TYPES,
-	LotProducts,
-	LotCandidates,
 	try_normalize_announcement_type,
-	normalize_estimated_amount,
 )
 
 
@@ -37,7 +33,6 @@ def _strip_code_fences(text: str) -> str:
 
 
 _MD_ESC_RE = re.compile(r"(?<!\\)\\([nrt])")
-_ESTIMATED_AMOUNT_VALUE_RE = re.compile(r"^\d+(?:\.\d+)?(?:~\d+(?:\.\d+)?)?$")
 
 
 def _unescape_md_control_sequences(text: str) -> str:
@@ -67,7 +62,7 @@ _TYPE_DEFAULTS: dict[str, Any] = {
 def _build_full_item_template() -> dict[str, Any]:
 	"""
 	Build a full item template that matches the crawler output structure.
-	Fields come from extract_fields.yaml (flat + lots) plus announcementUrl/Name/Content and dataId.
+	Fields come from extract_fields.yaml (all stages) plus announcementUrl/Name/Content and dataId.
 	"""
 	out: dict[str, Any] = {
 		"dataId": "",
@@ -77,10 +72,8 @@ def _build_full_item_template() -> dict[str, Any]:
 	}
 
 	# Keep field definitions identical to crawler extraction config.
-	for stage in ("flat", "lots"):
-		for f in load_extract_fields(stage=stage):
-			# lots stage includes lotProducts/lotCandidates keys (array); flat stage includes strings/numbers/booleans.
-			out.setdefault(f.key, _TYPE_DEFAULTS.get(f.type, ""))
+	for f in load_extract_fields(stage=None):
+		out.setdefault(f.key, _TYPE_DEFAULTS.get(f.type, ""))
 
 	return out
 
@@ -107,85 +100,40 @@ def _normalize_item_to_crawler_schema(raw_item: dict[str, Any]) -> dict[str, Any
 	item["announcementName"] = ("" if item.get("announcementName") is None else str(item.get("announcementName"))).strip()
 	item["announcementContent"] = ("" if item.get("announcementContent") is None else str(item.get("announcementContent"))).strip()
 
-	for stage in ("flat", "lots"):
-		for f in load_extract_fields(stage=stage):
-			item[f.key] = normalize_field_value(f.key, item.get(f.key), f.type)
+	for f in load_extract_fields(stage=None):
+		item[f.key] = normalize_field_value(f.key, item.get(f.key), f.type)
 
 	item["announcementType"] = try_normalize_announcement_type(item.get("announcementType")) or ""
 	return item
 
 
-async def _extract_normalize_item_meta_flat(src_text: str) -> dict[str, Any]:
+async def _extract_normalize_item_fields(
+	src_text: str,
+	*,
+	stage: str,
+	product_category_table: str | None,
+) -> dict[str, Any]:
 	"""
-	/normalize_item 专用：一次抽取 meta+flat（使用独立 YAML 配置）。
-
-	字段集合：normalize_item_meta_flat_fields.yaml
-	- 在 extract_fields.yaml(flat) 的基础上新增 announcementUrl/announcementName/announcementContent
-	- 其余字段定义保持一致（类型/空值规则/枚举等）
+	/normalize_item 专用：按 stage 抽取字段（使用独立 YAML 配置）。
 	"""
 	text = (src_text or "").strip()
-
-	fields_path = "normalize_item_meta_flat_fields.yaml"
-	fields = load_extract_fields(fields_path=fields_path, stage="flat")
-	extract_prompt = generate_extract_prompt(fields, stage="flat")
-	empty_result = {f.key: _TYPE_DEFAULTS.get(f.type, "") for f in fields}
-
 	if not text:
-		return empty_result
-
-	system_prompt = f"""
-You are an information extraction engine.
-You will be given an unstructured text blob from external bid sources (may be JSON, may be key-value text, may be mixed).
-Extract the requested fields according to the schema below and return ONLY valid JSON.
-No markdown, no code fences, no extra text.
-
-{extract_prompt}
-
-Rules:
-- Treat the input as plain text; do not require it to be valid JSON.
-- Fill missing fields with the correct empty value by type (string=\"\", number=null, array=[], boolean=false).
-- Special rule for estimatedAmount:
-  - Only output estimatedAmount when announcementType is one of: 招标 / 询价 / 竞谈 / 单一 / 竞价 / 邀标. For other types, output empty string.
-  - Priority (high -> low):
-    1) If there is an explicit awarded/winning/transaction amount in the input (e.g. 中标金额/成交金额/定标金额/授标金额),
-       set estimatedAmount to that amount in yuan as a single number string (no commas).
-       Prefer the winning supplier's amount; if missing, use the first candidate's bid price as fallback.
-    2) Otherwise, if procurement items / BOQ / service scope exist (标的物/采购清单/服务范围),
-       estimate a reasonable amount in yuan as either a single number string or a range \"lo~hi\".
-    3) Otherwise output empty string (do not guess).
-  - The estimate MUST be derived mainly from the procurement items (标的物), quantities, specs, service scope, and similar signals.
-    Do NOT use irrelevant fees (e.g. document price, service fee, deposit, CA/platform fees) as the estimate.
-- Money amounts are in 单位“元” (convert 万/亿 to 元 if needed).
-- Dates are YYYY-MM-DD.
-""".strip()
-
-	# Hard cap to avoid extremely large prompts.
-	max_chars = 200_000
-	if len(text) > max_chars:
-		text = text[:max_chars]
-
-	user_prompt = f"SOURCE_TEXT:\\n{text}"
-	try:
-		Schema = build_extract_fields_model(fields, model_name="NormalizeItemMetaFlat")
-		result = await asyncio.to_thread(
-			invoke_structured,
-			[
-				{"role": "system", "content": system_prompt},
-				{"role": "user", "content": user_prompt},
-			],
-			Schema,
+		# Let extract_fields_from_text return the correct empty_result by stage.
+		return await extract_fields_from_text(
+			"",
+			site_name="normalize_item",
+			stage=stage,
+			fields_path="normalize_item_meta_flat_fields.yaml",
+			product_category_table=product_category_table,
 		)
-	except Exception:
-		return empty_result
 
-	extracted = result.model_dump() if hasattr(result, "model_dump") else {}
-
-	# Normalize by field types using existing normalize_field_value.
-	normalized: dict[str, Any] = {}
-	for f in fields:
-		raw_value = extracted.get(f.key, _TYPE_DEFAULTS.get(f.type, ""))
-		normalized[f.key] = normalize_field_value(f.key, raw_value, f.type)
-	return normalized
+	return await extract_fields_from_text(
+		text,
+		site_name="normalize_item",
+		stage=stage,
+		fields_path="normalize_item_meta_flat_fields.yaml",
+		product_category_table=product_category_table,
+	)
 
 
 async def convert_announcement_content_to_markdown(announcement_content: str) -> str:
@@ -228,9 +176,9 @@ async def normalize_source_json_to_item(
 	product_category_table: str | None = None,
 ) -> dict[str, Any]:
 	"""
-	Map arbitrary source JSON/text into our unified item template using the SAME 2-stage extraction as /crawl:
-	- stage=flat: flat fields
-	- stage=lots: lotProducts/lotCandidates
+	Map arbitrary source JSON/text into our unified item template via multi-stage extraction:
+	- meta / contacts / address_detail / lots
+	(lots is a single call that outputs both lotProducts + lotCandidates)
 
 	Input is a raw text string (often a JSON blob mixed with other text). We feed it directly to the extractor.
 	"""
@@ -239,21 +187,21 @@ async def normalize_source_json_to_item(
 	if not src:
 		return template
 
-	flat_fields = await _extract_normalize_item_meta_flat(src)
-	lots_fields = await extract_fields_from_html(
-		src,
-		site_name="normalize_item",
-		stage="lots",
-		product_category_table=product_category_table,
+	meta_fields, contacts_fields, address_detail_fields, lots_fields = await asyncio.gather(
+		_extract_normalize_item_fields(src, stage="meta", product_category_table=None),
+		_extract_normalize_item_fields(src, stage="contacts", product_category_table=None),
+		_extract_normalize_item_fields(src, stage="address_detail", product_category_table=None),
+		_extract_normalize_item_fields(src, stage="lots", product_category_table=product_category_table),
 	)
 
 	merged = dict(template)
-	merged.update(flat_fields or {})
-
+	merged.update(meta_fields or {})
+	merged.update(contacts_fields or {})
+	merged.update(address_detail_fields or {})
 	merged["lotProducts"] = (lots_fields or {}).get("lotProducts") or []
 	merged["lotCandidates"] = (lots_fields or {}).get("lotCandidates") or []
 
-	raw_announcement_type = (flat_fields or {}).get("announcementType")
+	raw_announcement_type = (meta_fields or {}).get("announcementType")
 	item = _normalize_item_to_crawler_schema(merged)
 
 	# 公告类别（13 选 1）强校验：
@@ -275,20 +223,15 @@ async def normalize_source_json_to_item(
 			)
 		item["announcementType"] = repaired
 
-	# estimatedAmount：仅当公告类型为【招标/询价/竞谈/单一/竞价/邀标】时才保留（由抽取阶段 DeepSeek 结合全文生成）。
-	# 本阶段只做：类型 gating + 正则校验（不做任何兜底/推导/再调用）。
-	try:
-		atype = (item.get("announcementType") or "").strip()
-		if atype not in {"招标", "询价", "竞谈", "单一", "竞价", "邀标"}:
-			item["estimatedAmount"] = ""
-		else:
-			est_text = str(item.get("estimatedAmount") or "").strip()
-			normalized = normalize_estimated_amount(est_text) if est_text else ""
-			if normalized and not _ESTIMATED_AMOUNT_VALUE_RE.match(normalized):
-				normalized = ""
-			item["estimatedAmount"] = normalized
-	except Exception:
-		# normalize_item should be best-effort; failures should not break the whole response.
-		pass
+	# estimatedAmount：
+	# - 与 announcementType 无关。
+	# - 仅由“中标金额/候选人报价/标的物”决定：
+	#   1) 若有中标金额：直接取中标金额（输出范围 "x~x"）
+	#      - 优先 winnerAmount
+	#      - 其次第一位中标/中标候选人报价（lotCandidates[].candidatePrices）
+	#   2) 若无中标金额但有标的物：保留 LLM 预估价（需为范围 "lo~hi"）
+	#   3) 若无中标金额且无标的物：返回 ""
+	# 本阶段只做：按上述优先级覆盖/清空 + 正则校验（不做任何兜底/推导/再调用）。
+	apply_estimated_amount_policy(item)
 
 	return item

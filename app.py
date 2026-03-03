@@ -278,7 +278,7 @@ async def content_to_md(http_request: Request):
 @app.post("/normalize_item", response_model=NormalizeItemResponse)
 async def normalize_item(http_request: Request):
     """
-    将任意来源（第三方 API / Excel 等）的 JSON 字符串映射为统一 item 模板（由 DeepSeek 生成）。
+    将任意来源（第三方 API / Excel 等）的文本（推荐：中文标签 Markdown）映射为统一 item 模板（由 DeepSeek 生成）。
     """
     try:
         raw = await http_request.body()

@@ -67,7 +67,11 @@ def _read_input_text(file: str | None) -> str:
 		return data.decode("utf-8", errors="replace")
 
 	# Interactive stdin: read line-by-line and stop as soon as we have valid JSON.
-	sys.stderr.write("Paste JSON, then press Enter. The script will output as soon as JSON is complete.\n")
+	sys.stderr.write(
+		"Paste JSON or text, then press Enter. "
+		"For JSON, output starts as soon as JSON is complete; "
+		"for plain text/markdown, press Ctrl+Z then Enter to finish.\n"
+	)
 	lines: list[str] = []
 	while True:
 		try:
@@ -106,17 +110,27 @@ def main() -> int:
 
 	parser = argparse.ArgumentParser(
 		description=(
-			"Wrap a raw JSON object into a Postman-ready request body for /normalize_item.\n"
-			"Output format: {\"sourceJson\": \"<JSON string>\"}\n\n"
+			"Wrap input text into a Postman-ready request body for /normalize_item.\n"
+			"Output format: {\"sourceJson\": \"<text>\"}\n\n"
 			"Examples:\n"
-			"  python scripts/wrap_source_json.py --file item.json\n"
-			"  Get-Content item.json -Raw | python scripts/wrap_source_json.py\n"
+			"  # JSON mode (old):\n"
+			"  python scripts/wrap_source_json.py --mode json --file item.json\n"
+			"  Get-Content item.json -Raw | python scripts/wrap_source_json.py --mode json\n\n"
+			"  # Markdown/text mode (new):\n"
+			"  python scripts/wrap_source_json.py --mode text --file item.md\n"
+			"  Get-Content item.md -Raw | python scripts/wrap_source_json.py --mode text\n"
 		),
 		formatter_class=argparse.RawDescriptionHelpFormatter,
 	)
 	parser.add_argument("--file", default=None, help="Input JSON file (default: read from stdin)")
 	parser.add_argument("--out", default=None, help="Write output JSON to file (default: print to stdout)")
 	parser.add_argument("--key", default="sourceJson", help="Wrapper field name (default: sourceJson)")
+	parser.add_argument(
+		"--mode",
+		default="auto",
+		choices=["auto", "json", "text"],
+		help="Input mode: auto (try JSON then fallback to text), json (parse JSON), text (wrap as-is).",
+	)
 	parser.add_argument("--pretty", action="store_true", help="Pretty-print outer JSON (indent=2)")
 	parser.add_argument(
 		"--pretty-inner",
@@ -130,23 +144,33 @@ def main() -> int:
 		print('{"%s": ""}' % args.key)
 		return 0
 
-	try:
-		parsed = _json_loads_maybe_twice(raw)
-	except json.JSONDecodeError as e:
-		sys.stderr.write(f"Invalid JSON input: {e}\n")
-		sys.stderr.write("Tip: if you copied from logs, make sure the input is valid JSON.\n")
-		return 2
+	mode = (args.mode or "auto").strip().lower()
+	if mode not in ("auto", "json", "text"):
+		mode = "auto"
 
-	# If the input already looks like {"sourceJson": "..."} keep it, just reformat.
-	if isinstance(parsed, dict) and list(parsed.keys()) == [args.key] and isinstance(parsed.get(args.key), str):
-		out_obj = parsed
+	if mode == "text":
+		out_obj = {args.key: raw}
 	else:
-		inner = (
-			json.dumps(parsed, ensure_ascii=False, indent=2)
-			if args.pretty_inner
-			else json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
-		)
-		out_obj = {args.key: inner}
+		try:
+			parsed = _json_loads_maybe_twice(raw)
+		except json.JSONDecodeError as e:
+			if mode == "json":
+				sys.stderr.write(f"Invalid JSON input: {e}\n")
+				sys.stderr.write("Tip: if you copied from logs, make sure the input is valid JSON.\n")
+				return 2
+			# auto fallback: treat as plain text (e.g. markdown)
+			out_obj = {args.key: raw}
+		else:
+			# If the input already looks like {"sourceJson": "..."} keep it, just reformat.
+			if isinstance(parsed, dict) and list(parsed.keys()) == [args.key] and isinstance(parsed.get(args.key), str):
+				out_obj = parsed
+			else:
+				inner = (
+					json.dumps(parsed, ensure_ascii=False, indent=2)
+					if args.pretty_inner
+					else json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+				)
+				out_obj = {args.key: inner}
 
 	out_text = json.dumps(out_obj, ensure_ascii=False, indent=2 if args.pretty else None)
 

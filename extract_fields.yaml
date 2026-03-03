@@ -1,8 +1,11 @@
 # 详情页字段提取配置（V2）
-# 定义需要从详情页中提取的字段（按 stage 分组，用于两次 LLM 提取）
+# 定义需要从详情页中提取的字段（按 stage 分组，用于多次 LLM 提取，可并发）
 #
 # - type: string (默认) | number | boolean | array
-# - stage: flat | lots
+# - stage: meta | contacts | address_detail | lots | address_admin
+#
+# 说明：
+# - address_admin 组字段由系统在后处理阶段从三组 AddressDetail 中派生得到（不在 LLM 抽取阶段直接提取）。
 #
 # 约定：
 # - 金额字段单位统一为“元”，小数位数尽量与原页面保持一致
@@ -10,17 +13,17 @@
 # - array 字段无内容时返回 []
 
 fields:
-  # ===== 扁平字段（stage: flat）=====
+  # ===== 元信息（stage: meta）=====
   - key: projectName
     name: 项目名称
     type: string
-    stage: flat
+    stage: meta
     hint: 整个招投标项目名称（取详情页的项目名称，或智能体总结）
 
   - key: projectId
     name: 项目编号
     type: string
-    stage: flat
+    stage: meta
     hint: |
       仅提取“项目编号/招标编号/采购编号/询价单号/合同编号/公告编号”等【明确标注】的编号值：
       - 典型写法：项目编号：XXX / 招标编号：XXX / 采购编号：XXX / 询价单号：XXX / 合同编号：XXX / 公告编号：XXX / No./Code: XXX
@@ -33,7 +36,7 @@ fields:
   - key: announcementDate
     name: 公告日期
     type: string
-    stage: flat
+    stage: meta
     required: true
     hint: |
       项目本公告发布日期，格式 YYYY-MM-DD（优先详情页明确标注的“发布时间/发布日期/公告时间”等字段）。
@@ -42,184 +45,181 @@ fields:
   - key: bidOpenDate
     name: 开标日期
     type: string
-    stage: flat
+    stage: meta
     hint: 项目开标日期，格式 YYYY-MM-DD
 
   - key: budgetAmount
     name: 预算金额
     type: number
-    stage: flat
+    stage: meta
     hint: 数字，单位：元。若页面为万元/亿需换算到元（小数位数尽量与原页面保持一致）
 
   - key: winnerAmount
     name: 中标金额
     type: number
-    stage: flat
+    stage: meta
     hint: 数字，单位：元。仅当详情页明确给出“中标/成交/定标/授标金额”等信息时填写；取不到填 null
 
   - key: estimatedAmount
     name: 预估金额
     type: string
-    stage: flat
+    stage: meta
     required: true
     hint: |
-      仅当公告类型为以下 6 类之一时才输出预估金额：招标、询价、竞谈、单一、竞价、邀标；其它公告类型必须返回 ""。
+      预估金额（AI 预估价），单位：元。输出必须为范围 "下限~上限"（不要输出单一金额；如只有单值金额，请输出为 "X~X"）。
 
-      输出格式（单位：元）：
-      - 单一金额：如 "123456.78"
-      - 或范围：如 "100000~200000"（范围用 ~ 连接）
-
-      计算逻辑（按优先级从高到低）：
-      1) 若详情页/输入中存在“中标/成交/定标/授标金额”等明确金额，则 estimatedAmount 必须直接取该金额（元，输出为单一金额字符串）。
-         - “中标金额”优先取中标单位的中标金额；若无明确中标金额，则取第一位中标候选单位的投标报价作为兜底。
-      2) 若无中标金额，但能识别出标的物/采购清单/服务范围等（即存在标的物），则让模型识别该项目下所有标的物的预估价格（综合数量/规格/工程量等），输出合理的预估金额（单一金额或范围）。
-      3) 若无中标金额，且无法识别任何标的物，则返回 ""（不要猜）。
+      计算逻辑（优先级高 -> 低）：
+      1) 若页面/输入中存在明确“中标/成交/定标/授标金额”等中标金额信息，则 estimatedAmount 必须直接取该金额，并输出为 "X~X"。
+         - 优先取中标单位的中标金额；若无明确中标金额，则取第一位中标候选单位的投标报价作为兜底。
+      2) 若无中标金额，但存在标的物/采购清单/服务范围等（即有标的物），根据该项目下所有标的物信息（数量/规格/工程量等）估算项目总价，输出合理范围 "下限~上限"。
+      3) 若无中标金额且无标的物，则返回 ""（不要猜）。
 
       禁止把招标文件售价、服务费、保证金、CA/平台费用等无关费用当作预估金额。
-
-  # ===== 地址字段（3 组 * 5，均为 string）=====
-  # 规则：
-  # - 详情页提取不到则填 ""（空字符串）
-  # - Country 默认填 "中国"（除非详情明确为其他国家）
-
-  - key: buyerCountry
-    name: 采购单位国家
-    type: string
-    stage: flat
-    hint: 从“buyerAddressDetail(详细地址/全地址)”中解析得到的国家；若详细地址为空则填“中国”
-
-  - key: buyerProvince
-    name: 采购单位省
-    type: string
-    stage: flat
-    hint: 从“buyerAddressDetail(详细地址/全地址)”中解析得到的省/自治区/直辖市；解析不到填 ""
-
-  - key: buyerCity
-    name: 采购单位市
-    type: string
-    stage: flat
-    hint: 从“buyerAddressDetail(详细地址/全地址)”中解析得到的市/州；解析不到填 ""
-
-  - key: buyerDistrict
-    name: 采购单位区县
-    type: string
-    stage: flat
-    hint: 从“buyerAddressDetail(详细地址/全地址)”中解析得到的区/县/旗；解析不到填 ""
-
-  - key: buyerAddressDetail
-    name: 采购单位详细地址
-    type: string
-    stage: flat
-    hint: |
-      从详情页提取到的“采购人/招标人/采购单位/招标单位”的完整地址（全地址文本），用于后续解析国家/省/市/区。
-      注意：不要把“采购组织单位/代理机构/平台技术支持”等其它单位的地址当成采购单位地址；如果只有这些地址，填 ""。
-      找不到填 ""。
-
-  - key: projectCountry
-    name: 项目所在国家
-    type: string
-    stage: flat
-    hint: 从“projectAddressDetail(详细地址/全地址)”中解析得到的国家；若详细地址为空则填“中国”
-
-  - key: projectProvince
-    name: 项目所在省
-    type: string
-    stage: flat
-    hint: 从“projectAddressDetail(详细地址/全地址)”中解析得到的省/自治区/直辖市；解析不到填 ""
-
-  - key: projectCity
-    name: 项目所在市
-    type: string
-    stage: flat
-    hint: 从“projectAddressDetail(详细地址/全地址)”中解析得到的市/州；解析不到填 ""
-
-  - key: projectDistrict
-    name: 项目所在区县
-    type: string
-    stage: flat
-    hint: 从“projectAddressDetail(详细地址/全地址)”中解析得到的区/县/旗；解析不到填 ""
-
-  - key: projectAddressDetail
-    name: 项目所在详细地址
-    type: string
-    stage: flat
-    hint: |
-      从详情页提取到的“项目地点/项目所在地/建设地点/工程地点”等项目相关地址（全地址文本），用于后续解析国家/省/市/区。
-      注意：不要使用采购单位/代理机构的地址来回填项目地址；找不到填 ""。
-
-  - key: deliveryCountry
-    name: 交货国家
-    type: string
-    stage: flat
-    hint: 从“deliveryAddressDetail(详细地址/全地址)”中解析得到的国家；若详细地址为空则填“中国”
-
-  - key: deliveryProvince
-    name: 交货省
-    type: string
-    stage: flat
-    hint: 从“deliveryAddressDetail(详细地址/全地址)”中解析得到的省/自治区/直辖市；解析不到填 ""
-
-  - key: deliveryCity
-    name: 交货市
-    type: string
-    stage: flat
-    hint: 从“deliveryAddressDetail(详细地址/全地址)”中解析得到的市/州；解析不到填 ""
-
-  - key: deliveryDistrict
-    name: 交货区县
-    type: string
-    stage: flat
-    hint: 从“deliveryAddressDetail(详细地址/全地址)”中解析得到的区/县/旗；解析不到填 ""
-
-  - key: deliveryAddressDetail
-    name: 交货详细地址
-    type: string
-    stage: flat
-    hint: |
-      从详情页提取到的“交货地点/履约地点/服务地点/供货地点/收货地址”等交付相关地址（全地址文本），用于后续解析国家/省/市/区。
-      注意：不要使用采购单位/代理机构地址来回填交货地址；找不到填 ""。
-
-  - key: buyerName
-    name: 采购单位
-    type: string
-    stage: flat
-    required: true
-    hint: 招标单位/采购单位全称
-
-  - key: buyerContact
-    name: 采购单位联系人
-    type: string
-    stage: flat
-    hint: 采购单位联系人（如有）
-
-  - key: buyerPhone
-    name: 采购单位联系电话
-    type: string
-    stage: flat
-    hint: 采购单位联系电话（如有）
-
-  - key: buyerEmail
-    name: 采购单位联系邮箱
-    type: string
-    stage: flat
-    hint: 采购单位联系邮箱（如有）
-
-  - key: agency
-    name: 招标代理机构
-    type: string
-    stage: flat
-    hint: 招标代理机构全称（如有）
 
   - key: announcementType
     name: 公告类别
     type: string
-    stage: flat
+    stage: meta
     required: true
     enum: [预审, 招标, 询价, 竞谈, 竞价, 邀标, 单一, 变更, 答疑, 候选, 中标, 合同, 终止]
     hint: |
       必须从枚举中选择一个。注意语义判断：
       - “评标结果公示” 属于“候选”
       - “招标结果公告/成交结果公告” 属于“中标”
+
+  # ===== 地址字段（两步：AddressDetail 抽取 + address_admin 派生）=====
+  # - stage=address_detail：只提取三组详细地址（buyer/project/deliveryAddressDetail）
+  # - stage=address_admin：由系统从三组 AddressDetail 派生得到国家/省/市/区
+
+  - key: buyerAddressDetail
+    name: 采购单位详细地址
+    type: string
+    stage: address_detail
+    hint: |
+      从详情页提取到的“采购人/招标人/采购单位/招标单位”的完整地址（全地址文本），用于后续解析国家/省/市/区。
+      注意：不要把“采购组织单位/代理机构/平台技术支持”等其它单位的地址当成采购单位地址；如果只有这些地址，填 ""。
+      找不到填 ""。
+
+  - key: projectAddressDetail
+    name: 项目所在详细地址
+    type: string
+    stage: address_detail
+    hint: |
+      从详情页提取到的“项目地点/项目所在地/建设地点/工程地点”等项目相关地址（全地址文本），用于后续解析国家/省/市/区。
+      注意：不要使用采购单位/代理机构的地址来回填项目地址；找不到填 ""。
+
+  - key: deliveryAddressDetail
+    name: 交货详细地址
+    type: string
+    stage: address_detail
+    hint: |
+      从详情页提取到的“交货地点/履约地点/服务地点/供货地点/收货地址”等交付相关地址（全地址文本），用于后续解析国家/省/市/区。
+      注意：不要使用采购单位/代理机构地址来回填交货地址；找不到填 ""。
+
+  # ===== 地址派生字段（stage: address_admin；不在 LLM 抽取阶段提取）=====
+  - key: buyerCountry
+    name: 采购单位国家
+    type: string
+    stage: address_admin
+    hint: 从“buyerAddressDetail(详细地址/全地址)”中解析得到的国家；若详细地址为空则填“中国”
+
+  - key: buyerProvince
+    name: 采购单位省
+    type: string
+    stage: address_admin
+    hint: 从“buyerAddressDetail(详细地址/全地址)”中解析得到的省/自治区/直辖市；解析不到填 ""
+
+  - key: buyerCity
+    name: 采购单位市
+    type: string
+    stage: address_admin
+    hint: 从“buyerAddressDetail(详细地址/全地址)”中解析得到的市/州；解析不到填 ""
+
+  - key: buyerDistrict
+    name: 采购单位区县
+    type: string
+    stage: address_admin
+    hint: 从“buyerAddressDetail(详细地址/全地址)”中解析得到的区/县/旗；解析不到填 ""
+
+  - key: projectCountry
+    name: 项目所在国家
+    type: string
+    stage: address_admin
+    hint: 从“projectAddressDetail(详细地址/全地址)”中解析得到的国家；若详细地址为空则填“中国”
+
+  - key: projectProvince
+    name: 项目所在省
+    type: string
+    stage: address_admin
+    hint: 从“projectAddressDetail(详细地址/全地址)”中解析得到的省/自治区/直辖市；解析不到填 ""
+
+  - key: projectCity
+    name: 项目所在市
+    type: string
+    stage: address_admin
+    hint: 从“projectAddressDetail(详细地址/全地址)”中解析得到的市/州；解析不到填 ""
+
+  - key: projectDistrict
+    name: 项目所在区县
+    type: string
+    stage: address_admin
+    hint: 从“projectAddressDetail(详细地址/全地址)”中解析得到的区/县/旗；解析不到填 ""
+
+  - key: deliveryCountry
+    name: 交货国家
+    type: string
+    stage: address_admin
+    hint: 从“deliveryAddressDetail(详细地址/全地址)”中解析得到的国家；若详细地址为空则填“中国”
+
+  - key: deliveryProvince
+    name: 交货省
+    type: string
+    stage: address_admin
+    hint: 从“deliveryAddressDetail(详细地址/全地址)”中解析得到的省/自治区/直辖市；解析不到填 ""
+
+  - key: deliveryCity
+    name: 交货市
+    type: string
+    stage: address_admin
+    hint: 从“deliveryAddressDetail(详细地址/全地址)”中解析得到的市/州；解析不到填 ""
+
+  - key: deliveryDistrict
+    name: 交货区县
+    type: string
+    stage: address_admin
+    hint: 从“deliveryAddressDetail(详细地址/全地址)”中解析得到的区/县/旗；解析不到填 ""
+
+  # ===== 联系方式/主体信息（stage: contacts）=====
+  - key: buyerName
+    name: 采购单位
+    type: string
+    stage: contacts
+    required: true
+    hint: 招标单位/采购单位全称
+
+  - key: buyerContact
+    name: 采购单位联系人
+    type: string
+    stage: contacts
+    hint: 采购单位联系人（如有）
+
+  - key: buyerPhone
+    name: 采购单位联系电话
+    type: string
+    stage: contacts
+    hint: 采购单位联系电话（如有）
+
+  - key: buyerEmail
+    name: 采购单位联系邮箱
+    type: string
+    stage: contacts
+    hint: 采购单位联系邮箱（如有）
+
+  - key: agency
+    name: 招标代理机构
+    type: string
+    stage: contacts
+    hint: 招标代理机构全称（如有）
 
   # ===== 标段字段（stage: lots）=====
   - key: lotProducts
@@ -234,7 +234,7 @@ fields:
         "subjects": "标的物（单条）",
         "productCategory": "具体产品（如能匹配“具体产品表”则填标准名称；匹配不到填\"\"）",
         "models": "型号（单条）",
-        "unitPrices": "单价（元，number；取不到填 null；如果是范围/多个值/非金额文本，填 null）",
+        "unitPrices": "单价（元，number；取不到填 null；如果是范围/多个值/非金额文本，填 null；若页面写万/亿需换算成元）",
         "quantities": "数量（正整数，单条）",
         "quantityUnit": "数量单位（如 台/套/个/门...；找不到填\"\"）"
       }
@@ -256,7 +256,7 @@ fields:
         "lotName": "标段名称（如有）",
         "type": "中标/中标候选人/非中标候选人（三选一）",
         "candidates": "单位名称（单条）",
-        "candidatePrices": "该单位对应的金额/报价（元，number；取不到填 null；如果是范围/多个值/非金额文本，填 null）"
+        "candidatePrices": "该单位对应的金额/报价（元，number；取不到填 null；如果是范围/多个值/非金额文本，填 null；若页面写万/亿需换算成元）"
       }
 
       重要规则：

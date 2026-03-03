@@ -40,35 +40,63 @@ async def _run_once(
 	with_full_pipeline: bool,
 ) -> dict[str, Any]:
 	# Import lazily so this script can show a clear error if deps/env missing.
-	from src.llm_transform import _extract_normalize_item_meta_flat, _normalize_item_to_crawler_schema
-	from src.custom_tools import TYPE_DEFAULTS
-	from src.config_manager import load_extract_fields
-	from src.custom_tools import extract_fields_from_html
+	from src.llm_transform import _normalize_item_to_crawler_schema
+	from src.custom_tools import extract_fields_from_text
 	from src.address_normalizer import extract_admin_divisions_from_details
+	from src.estimated_amount_policy import apply_estimated_amount_policy
 
 	stats: dict[str, Any] = {"ts": _now_iso()}
 
-	# Stage 1: meta + flat
+	fields_path = "normalize_item_meta_flat_fields.yaml"
+
+	# Stage 1: meta
 	t0 = time.perf_counter()
-	flat = await _extract_normalize_item_meta_flat(source_text)
+	meta = await extract_fields_from_text(
+		source_text,
+		site_name="normalize_item",
+		stage="meta",
+		fields_path=fields_path,
+	)
 	t1 = time.perf_counter()
 
-	# Stage 2: lots
-	lots = await extract_fields_from_html(source_text, site_name="normalize_item", stage="lots")
+	# Stage 2: contacts
+	contacts = await extract_fields_from_text(
+		source_text,
+		site_name="normalize_item",
+		stage="contacts",
+		fields_path=fields_path,
+	)
 	t2 = time.perf_counter()
 
-	# Stage 2.5: schema normalization (non-LLM, should be fast)
-	# IMPORTANT: do NOT call normalize_source_json_to_item() here, because it would call LLM again.
-	# Build a minimal template with correct empty defaults, then apply the same schema normalizer.
-	flat_fields = load_extract_fields(stage="flat", fields_path="normalize_item_meta_flat_fields.yaml")
-	lots_fields = load_extract_fields(stage="lots", fields_path="extract_fields.yaml")
-	all_fields = list(flat_fields) + list(lots_fields)
-	item: dict[str, Any] = {f.key: TYPE_DEFAULTS.get(f.type, "") for f in all_fields}
-	item.update(flat or {})
-	item["lotProducts"] = (lots or {}).get("lotProducts") or []
-	item["lotCandidates"] = (lots or {}).get("lotCandidates") or []
-	item = _normalize_item_to_crawler_schema(item)
+	# Stage 3: address_detail
+	address_detail = await extract_fields_from_text(
+		source_text,
+		site_name="normalize_item",
+		stage="address_detail",
+		fields_path=fields_path,
+	)
 	t3 = time.perf_counter()
+
+	# Stage 4: lots
+	lots = await extract_fields_from_text(
+		source_text,
+		site_name="normalize_item",
+		stage="lots",
+		fields_path=fields_path,
+	)
+	t4 = time.perf_counter()
+
+	# Stage 4.5: schema normalization + estimatedAmount policy (non-LLM, should be fast)
+	# IMPORTANT: do NOT call normalize_source_json_to_item() here, because it would call LLM again.
+	raw_item: dict[str, Any] = {}
+	raw_item.update(meta or {})
+	raw_item.update(contacts or {})
+	raw_item.update(address_detail or {})
+	raw_item["lotProducts"] = (lots or {}).get("lotProducts") or []
+	raw_item["lotCandidates"] = (lots or {}).get("lotCandidates") or []
+	item = _normalize_item_to_crawler_schema(raw_item)
+	apply_estimated_amount_policy(item)
+	t5 = time.perf_counter()
 
 	addr_fields: dict[str, str] = {}
 	if with_address:
@@ -80,19 +108,23 @@ async def _run_once(
 			max_retries=max_retries,
 		)
 		item.update(addr_fields)
-	t4 = time.perf_counter()
+	t6 = time.perf_counter()
 
 	stats["durations_s"] = {
-		"meta_flat_llm": round(t1 - t0, 3),
-		"lots_llm": round(t2 - t1, 3),
-		"normalize_schema_non_llm": round(t3 - t2, 3),
-		"address_llm": round(t4 - t3, 3),
-		"total": round(t4 - t0, 3),
+		"meta_llm": round(t1 - t0, 3),
+		"contacts_llm": round(t2 - t1, 3),
+		"address_detail_llm": round(t3 - t2, 3),
+		"lots_llm": round(t4 - t3, 3),
+		"normalize_schema_non_llm": round(t5 - t4, 3),
+		"address_admin_llm": round(t6 - t5, 3),
+		"total": round(t6 - t0, 3),
 	}
 
 	# Minimal payload so the report stays readable.
 	stats["outputs"] = {
-		"flat_keys": sorted(list((flat or {}).keys())),
+		"meta_keys": sorted(list((meta or {}).keys())),
+		"contacts_keys": sorted(list((contacts or {}).keys())),
+		"address_detail_keys": sorted(list((address_detail or {}).keys())),
 		"lots_counts": {
 			"lotProducts": len((lots or {}).get("lotProducts") or []),
 			"lotCandidates": len((lots or {}).get("lotCandidates") or []),
@@ -116,7 +148,7 @@ async def _run_once(
 
 async def main() -> int:
 	parser = argparse.ArgumentParser(
-		description="Benchmark /normalize_item internal stages (meta+flat, lots, address) without starting uvicorn."
+		description="Benchmark /normalize_item internal stages (meta/contacts/address_detail/lots/address_admin) without starting uvicorn."
 	)
 	parser.add_argument("--text", help="Input sourceJson text", default=None)
 	parser.add_argument("--file", help="Read input text from file", default=None)

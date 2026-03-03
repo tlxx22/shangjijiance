@@ -125,7 +125,7 @@ data: {"type":"item","request_id":"a1b2c3d4","data":{"dataId":"<sha256>","announ
 - `lotCandidates[].candidatePrices` 单位为“元”；类型为 number；取不到/不合法填 `null`
 - `lotProducts[].unitPrices` 单位为“元”；类型为 number；取不到/不合法填 `null`
 - `lotProducts[].quantityUnit` 为数量单位（如 `台/套/个`），取不到填 `""`
-- `estimatedAmount` 仅当公告类型为“招标/询价/竞谈/单一/竞价/邀标”时才可能为非空；格式可为 `"下限~上限"` 或单一金额字符串（均为元）；取不到填 `""`
+- `estimatedAmount` 与公告类型无关；仅由“中标金额/候选人报价/标的物”决定；格式必须为 `"下限~上限"`（元；若只有单值金额则输出为 `"X~X"`）；取不到填 `""`
 - 地址字段已拆分为 3 组 * 5 个扁平字段（取不到填 `""`；`*Country` 默认为 `"中国"`）：
   - `buyerCountry/buyerProvince/buyerCity/buyerDistrict/buyerAddressDetail`
   - `projectCountry/projectProvince/projectCity/projectDistrict/projectAddressDetail`
@@ -329,7 +329,9 @@ curl -X POST http://localhost:8000/embedding \
 
 ## POST /normalize_item
 
-将任意来源（第三方 API / Excel 导入等）的 JSON 字符串，映射为本项目的 **统一 item 模板**（由 DeepSeek 生成）。
+将任意来源（第三方 API / Excel 导入等）的文本映射为本项目的 **统一 item 模板**（由 DeepSeek 生成）。
+
+推荐将 `sourceJson` 组织为“中文标签的结构化 Markdown 文本”（使用 `###` 小节标题承载字段名），便于模型稳定提取。
 
 ### 请求
 
@@ -337,13 +339,13 @@ curl -X POST http://localhost:8000/embedding \
 
 ```json
 {
-  "sourceJson": "{\"foo\": 1, \"bar\": \"...\"}",
+  "sourceJson": "### 标题\n...\n\n### 正文\n...\n\n### 发布时间\n2026-02-16\n",
   "productCategoryTable": "挖机、液压挖掘机\n汽车起重机、越野起重机"
 }
 ```
 
 说明：
-- `sourceJson` 是其它来源数据的 JSON 字符串（可包含嵌套结构）
+- `sourceJson` 是其它来源数据的文本（推荐：中文标签 Markdown 文本；服务端按“纯文本”处理，不要求是合法 JSON）
 - `productCategoryTable` 可选：具体产品匹配表（raw string）。存在时覆盖默认“具体产品表”，注入到 lotProducts.productCategory 的匹配提示词中；不传则使用内置表。
 - 路由：同字段抽取一样由 `trans.py` 的 `ROUTE` 控制（`official`/`sany`）
 
