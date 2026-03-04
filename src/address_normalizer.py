@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
@@ -110,9 +111,8 @@ class AdminDivisions(BaseModel):
 def _is_illegal_text(s: str) -> bool:
 	if not s:
 		return False
-	if not _ALLOWED_CHARS_RE.match(s):
-		return True
-	# Reject control chars.
+	# Only reject control chars; allow any language (including non-ASCII like ñ) and punctuation.
+	# NOTE: upstream inputs are not controllable, so we intentionally do NOT enforce a strict charset whitelist.
 	if any(ord(ch) < 32 for ch in s):
 		return True
 	return False
@@ -120,6 +120,46 @@ def _is_illegal_text(s: str) -> bool:
 
 def _is_abbrev_token(s: str) -> bool:
 	return s in _CN_ABBREV_TOKENS
+
+
+def _fold_place_text(text: str) -> str:
+	"""
+	Normalize place strings for robust matching:
+	- lower-case
+	- strip diacritics (e.g. Biñan -> Binan)
+	"""
+	s = (text or "").strip()
+	if not s:
+		return ""
+	s = unicodedata.normalize("NFKD", s)
+	s = "".join(ch for ch in s if not unicodedata.combining(ch))
+	return s.lower()
+
+
+_PH_HINT_RE = re.compile(r"\b(brgy|barangay)\b")
+
+
+def _infer_country_from_places(*, detail: str, province: str, city: str, district: str) -> str:
+	"""
+	Infer country when it's missing but address contains strong location hints.
+
+	This is a best-effort heuristic (inputs are not controllable).
+	Return empty string when unsure.
+	"""
+	combined = " ".join([detail or "", province or "", city or "", district or ""]).strip()
+	folded = _fold_place_text(combined)
+	if not folded:
+		return ""
+
+	# Philippines (high-confidence signals)
+	if "philippines" in folded:
+		return "菲律宾"
+	if _PH_HINT_RE.search(folded):
+		return "菲律宾"
+	if ("laguna" in folded) and ("binan" in folded):
+		return "菲律宾"
+
+	return ""
 
 
 def _validate_group(group: AddressGroup) -> tuple[bool, str]:
@@ -465,15 +505,20 @@ deliveryCountry,deliveryProvince,deliveryCity,deliveryDistrict
 Rules:
 - For each group, ONLY use that group's AddressDetail as the source; do NOT use other group details.
 - If a group's AddressDetail is empty, output country=\"中国\" and province/city/district as empty strings.
-- Do NOT use abbreviations (e.g., 京/沪/浙/皖/赣/内蒙/广西/宁夏/新疆/西藏...).
-- Names must be full-form:
-  - Provinces: “xx省”; Municipalities: “北京市/天津市/上海市/重庆市”
-  - Autonomous regions must be full names like “内蒙古自治区/广西壮族自治区/宁夏回族自治区/新疆维吾尔自治区/西藏自治区”
-  - SAR: “香港特别行政区/澳门特别行政区”
-  - Taiwan MUST be “中国台湾” (province), and country must be “中国”
-  - Cities end with 市/州/盟/地区 when applicable
-  - Districts end with 区/县/市/旗 when present
-- If you cannot confidently extract a non-empty field, output \"\" (do NOT guess).
+- Output fields in Chinese or the original language.
+- China rules (when the address is in China OR you set country=\"中国\"):
+  - Do NOT use abbreviations (e.g., 京/沪/浙/皖/赣/内蒙/广西/宁夏/新疆/西藏...).
+  - Names must be full-form:
+    - Provinces: “xx省”; Municipalities: “北京市/天津市/上海市/重庆市”
+    - Autonomous regions must be full names like “内蒙古自治区/广西壮族自治区/宁夏回族自治区/新疆维吾尔自治区/西藏自治区”
+    - SAR: “香港特别行政区/澳门特别行政区”
+    - Taiwan MUST be “中国台湾” (province), and country must be “中国”
+    - Cities end with 市/州/盟/地区 when applicable
+    - Districts end with 区/县/市/旗 when present
+- Non-China rules (when the address is clearly outside China OR you set a non-China country):
+  - Do NOT enforce the China suffix rules above.
+  - If country is not explicitly mentioned, you MAY infer the country from clear city/province clues when unambiguous.
+- If you cannot confidently extract a field, output \"\".
 """.strip()
 
 	payload = {
@@ -511,6 +556,35 @@ Rules:
 			cand.update({"projectCountry": "中国", "projectProvince": "", "projectCity": "", "projectDistrict": ""})
 		if not delivery_detail:
 			cand.update({"deliveryCountry": "中国", "deliveryProvince": "", "deliveryCity": "", "deliveryDistrict": ""})
+
+		# Best-effort: infer missing/incorrect country for foreign addresses when hints are strong.
+		if buyer_detail:
+			inferred = _infer_country_from_places(
+				detail=buyer_detail,
+				province=cand.get("buyerProvince", ""),
+				city=cand.get("buyerCity", ""),
+				district=cand.get("buyerDistrict", ""),
+			)
+			if inferred and (cand.get("buyerCountry", "") or "").strip() in {"", "中国"}:
+				cand["buyerCountry"] = inferred
+		if project_detail:
+			inferred = _infer_country_from_places(
+				detail=project_detail,
+				province=cand.get("projectProvince", ""),
+				city=cand.get("projectCity", ""),
+				district=cand.get("projectDistrict", ""),
+			)
+			if inferred and (cand.get("projectCountry", "") or "").strip() in {"", "中国"}:
+				cand["projectCountry"] = inferred
+		if delivery_detail:
+			inferred = _infer_country_from_places(
+				detail=delivery_detail,
+				province=cand.get("deliveryProvince", ""),
+				city=cand.get("deliveryCity", ""),
+				district=cand.get("deliveryDistrict", ""),
+			)
+			if inferred and (cand.get("deliveryCountry", "") or "").strip() in {"", "中国"}:
+				cand["deliveryCountry"] = inferred
 
 		buyer_group = AddressGroup(
 			country=cand["buyerCountry"],

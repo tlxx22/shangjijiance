@@ -537,95 +537,83 @@ class LotProducts(RootModel[list[LotProduct]]):
 					return []
 			return []
 
-		def _pick(parts: list[Any], idx: int, default: Any = "") -> Any:
-			if not parts:
-				return default
-			if len(parts) == 1:
-				return parts[0]
-			return parts[idx] if idx < len(parts) else default
-
-		def _money_list(raw: Any) -> list[float | None]:
+		def _pick_unit_price(raw: Any) -> float | None:
 			"""
-			Parse a list of money values (yuan) from common LLM outputs.
-			- Returns list[float|None]; invalid values become None.
-			- Supports thousand separators and 万/亿 units.
+			Parse ONE money value (yuan) from common LLM outputs.
+			- list: pick the first parseable value
+			- stringified JSON array: parse and pick first parseable value
+			- otherwise: parse as scalar
 			"""
 			if raw is None:
-				return []
+				return None
 			if isinstance(raw, list):
-				return [_to_yuan(x) for x in raw]
+				for x in raw:
+					val = _to_yuan(x)
+					if val is not None:
+						return val
+				return None
 			if isinstance(raw, (int, float, Decimal)):
-				val = _to_yuan(raw)
-				return [val] if val is not None else []
+				return _to_yuan(raw)
 			if isinstance(raw, dict):
-				# unexpected shape; treat as empty to avoid inventing data
-				return []
+				return None
 			if isinstance(raw, str):
 				s = raw.strip()
 				if not s or s.lower() in _EMPTY_STRINGS:
-					return []
-				# stringified JSON array
+					return None
 				if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
 					try:
 						parsed = json.loads(s)
-						return _money_list(parsed)
+						return _pick_unit_price(parsed)
 					except Exception:
 						pass
-
-				# single amount (strict)
-				single = _to_yuan(s)
-				if single is not None:
-					return [single]
-
-			# fallback
-			val = _to_yuan(raw)
-			return [val] if val is not None else []
+				return _to_yuan(s)
+			return _to_yuan(raw)
 
 		items = _as_list(v)
 		out: list[dict] = []
 		for item in items:
-			lot_number = _join_list(item.get("lotNumber")) or "标段一"
+			lot_number_raw = _join_list(item.get("lotNumber"))
+			lot_number = lot_number_raw or "标段一"
 			lot_name = _join_list(item.get("lotName"))
 
-			subjects = _to_str_list(item.get("subjects"))
+			subjects = _join_list(item.get("subjects"))
 			if not subjects:
-				desc = _join_list(item.get("description"))
-				subjects = [desc] if desc else []
-			product_categories = _to_str_list(item.get("productCategory"))
-			models = _to_str_list(item.get("models"))
-			unit_prices = _money_list(item.get("unitPrices"))
-			quantities = _to_str_list(item.get("quantities"))
-			quantity_units = _to_str_list(
+				subjects = _join_list(item.get("description"))
+			product_category = _join_list(item.get("productCategory"))
+			models = _join_list(item.get("models"))
+			unit_price = _pick_unit_price(item.get("unitPrices"))
+			quantities = _join_list(item.get("quantities"))
+			quantity_unit = _join_list(
 				item.get("quantityUnit") or item.get("quantity_unit") or item.get("数量单位") or item.get("单位")
 			)
 
-			row_count = max(
-				len(subjects),
-				len(product_categories),
-				len(models),
-				len(unit_prices),
-				len(quantities),
-				len(quantity_units),
+			keep = any(
+				[
+					bool(lot_number_raw),
+					bool(lot_name),
+					bool(subjects),
+					bool(product_category),
+					bool(models),
+					unit_price is not None,
+					bool(quantities),
+					bool(quantity_unit),
+				]
 			)
-			if row_count <= 0:
+			if not keep:
 				continue
 
-			for idx in range(row_count):
-				subject_value = _pick(subjects, idx)
-				product_category_value = _pick(product_categories, idx)
-
-				out.append(
-					{
-						"lotNumber": lot_number,
-						"lotName": lot_name,
-						"subjects": subject_value,
-						"productCategory": product_category_value,
-						"models": _pick(models, idx),
-						"unitPrices": _pick(unit_prices, idx, None),
-						"quantities": _pick(quantities, idx),
-						"quantityUnit": _pick(quantity_units, idx),
-					}
-				)
+			out.append(
+				{
+					"lotNumber": lot_number,
+					"lotName": lot_name,
+					"subjects": subjects,
+					"productCategory": product_category,
+					"models": models,
+					"unitPrices": unit_price,
+					"quantities": quantities,
+					"quantityUnit": quantity_unit,
+				}
+			)
 
 		return out
 

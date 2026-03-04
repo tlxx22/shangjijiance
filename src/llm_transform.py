@@ -8,7 +8,7 @@ from .extract_client import chat_completion
 from .config_manager import load_extract_fields
 from .custom_tools import extract_fields_from_text, normalize_field_value
 from .announcement_type_repair import AnnouncementTypeRepairError, repair_announcement_type
-from .estimated_amount_policy import apply_estimated_amount_policy
+from .estimated_amount_deriver import fill_estimated_amount_after_lots
 from .field_schemas import (
 	ANNOUNCEMENT_TYPES,
 	try_normalize_announcement_type,
@@ -74,6 +74,10 @@ def _build_full_item_template() -> dict[str, Any]:
 	# Keep field definitions identical to crawler extraction config.
 	for f in load_extract_fields(stage=None):
 		out.setdefault(f.key, _TYPE_DEFAULTS.get(f.type, ""))
+
+	# isEquipment：不确定时默认 true（召回优先）
+	if "isEquipment" in out:
+		out["isEquipment"] = True
 
 	return out
 
@@ -232,6 +236,10 @@ async def normalize_source_json_to_item(
 	#   2) 若无中标金额但有标的物：保留 LLM 预估价（需为范围 "lo~hi"）
 	#   3) 若无中标金额且无标的物：返回 ""
 	# 本阶段只做：按上述优先级覆盖/清空 + 正则校验（不做任何兜底/推导/再调用）。
-	apply_estimated_amount_policy(item)
+	await fill_estimated_amount_after_lots(
+		item,
+		site_name="normalize_item",
+		fields_path="normalize_item_meta_flat_fields.yaml",
+	)
 
 	return item

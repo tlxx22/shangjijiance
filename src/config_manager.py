@@ -23,7 +23,7 @@ class ExtractField(BaseModel):
 	key: str  # 字段键名（英文）
 	name: str  # 字段中文名
 	type: str = "string"  # 类型: string, number, boolean, array
-	stage: str = "meta"  # 分组: meta | contacts | address_detail | lots | address_admin
+	stage: str = "meta"  # 分组: meta | contacts | address_detail | lots | address_admin | estimated_amount
 	required: bool = False  # 是否必填（用于 prompt 强约束）
 	enum: list[str] | None = None  # 枚举值（用于 prompt 强约束）
 	hint: str = ""  # 提取提示
@@ -112,7 +112,7 @@ def load_extract_fields(fields_path: str = "extract_fields.yaml", stage: str | N
 
 	Args:
 		fields_path: 字段配置文件路径
-		stage: 可选，按 stage 过滤（meta/contacts/address_detail/lots/address_admin）
+		stage: 可选，按 stage 过滤（meta/contacts/address_detail/lots/address_admin/estimated_amount）
 
 	Returns:
 		字段定义列表（可按 stage 过滤）
@@ -149,7 +149,7 @@ def generate_extract_prompt(
 
 	Args:
 		fields: 字段定义列表
-		stage: meta / contacts / address_detail / lots / address_admin
+		stage: meta / contacts / address_detail / lots / address_admin / estimated_amount
 
 	Returns:
 		提取提示词字符串

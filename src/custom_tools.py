@@ -492,7 +492,7 @@ from .field_schemas import (
 	normalize_date_ymd,
 	normalize_estimated_amount,
 )
-from .estimated_amount_policy import apply_estimated_amount_policy
+from .estimated_amount_deriver import fill_estimated_amount_after_lots
 from .announcement_type_repair import repair_announcement_type
 
 
@@ -853,7 +853,7 @@ async def extract_fields_from_page(
 		return {}
 
 	# 根据类型生成空值字典
-	empty_result = {f.key: TYPE_DEFAULTS.get(f.type, "") for f in fields}
+	empty_result = {f.key: (True if f.key == "isEquipment" else TYPE_DEFAULTS.get(f.type, "")) for f in fields}
 
 	try:
 		logger.info(f"[{site_name}] 正在提取详情页字段（stage={stage}）...")
@@ -957,7 +957,8 @@ async def extract_fields_from_page(
 			# 类型归一化
 			normalized: dict = {}
 			for f in fields:
-				raw_value = extracted.get(f.key, TYPE_DEFAULTS.get(f.type, ""))
+				default_value = True if f.key == "isEquipment" else TYPE_DEFAULTS.get(f.type, "")
+				raw_value = extracted.get(f.key, default_value)
 				normalized[f.key] = normalize_field_value(f.key, raw_value, f.type)
 
 			logger.info(f"[{site_name}] ✓ 字段提取成功（stage={stage}）")
@@ -1124,11 +1125,12 @@ async def extract_fields_from_html(
 		return {}
 
 	html = _sanitize_html_for_extraction(html, site_name=site_name)
-	empty_result = {f.key: TYPE_DEFAULTS.get(f.type, "") for f in fields}
+	empty_result = {f.key: (True if f.key == "isEquipment" else TYPE_DEFAULTS.get(f.type, "")) for f in fields}
 	if not html:
 		return empty_result
 
 	include_estimated_amount = any(getattr(f, "key", "") == "estimatedAmount" for f in fields)
+	include_is_equipment = any(getattr(f, "key", "") == "isEquipment" for f in fields)
 
 	system_prompt = f"""
 You are an information extraction engine.
@@ -1144,20 +1146,32 @@ Rules:
 - Dates are YYYY-MM-DD.
 """.strip()
 
+	if include_is_equipment:
+		system_prompt += (
+			"\n\n"
+			"Special rule for isEquipment:\n"
+			"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
+			"- If uncertain, output true.\n"
+		)
+
 	if include_estimated_amount:
 		system_prompt += (
 			"\n\n"
 			"Special rule for estimatedAmount:\n"
 			"- estimatedAmount MUST be a range string \"lo~hi\" in yuan (both sides are numbers; no commas).\n"
 			"  Do NOT output a single number; if only one amount is known, output \"x~x\".\n"
+			"- Use Arabic numerals only; do NOT use scientific notation; do NOT include spaces or unit words.\n"
 			"- Priority (high -> low):\n"
 			"  1) If there is an explicit awarded/winning/transaction amount in the input (e.g. 中标金额/成交金额/定标金额/授标金额),\n"
 			"     set estimatedAmount to that amount as \"x~x\".\n"
 			"     Prefer the winning supplier's amount; if missing, use the first winning-candidate bid price as fallback.\n"
 			"  2) Otherwise, if procurement items / BOQ / service scope exist (标的物/采购清单/服务范围),\n"
-			"     estimate a reasonable TOTAL amount in yuan as a range \"lo~hi\".\n"
+			"     you MUST output a NON-empty reasonable TOTAL amount in yuan as a range \"lo~hi\".\n"
+			"     Even if no explicit unit price/budget is provided, you MAY use common market price knowledge based on item type/category,\n"
+			"     and choose a conservative WIDE range when uncertain (do NOT return empty).\n"
 			"  3) Otherwise output empty string (do not guess).\n"
-			"- The estimate MUST be derived mainly from the procurement items (标的物), quantities, specs, service scope, and similar signals.\n"
+			"- Ignore non-money ranges such as 1.4~3m3, date ranges, model parameter ranges, etc.\n"
+			"- The estimate SHOULD be derived mainly from the procurement items (标的物), quantities, specs, service scope, and similar signals.\n"
 			"  Do NOT use irrelevant fees (e.g. document price, service fee, deposit, CA/platform fees) as the estimate.\n"
 		)
 
@@ -1180,11 +1194,92 @@ Rules:
 	extracted = result.model_dump() if hasattr(result, "model_dump") else {}
 	normalized: dict = {}
 	for f in fields:
-		raw_value = extracted.get(f.key, TYPE_DEFAULTS.get(f.type, ""))
+		default_value = True if f.key == "isEquipment" else TYPE_DEFAULTS.get(f.type, "")
+		raw_value = extracted.get(f.key, default_value)
 		normalized[f.key] = normalize_field_value(f.key, raw_value, f.type)
 
 	logger.info(f"[{site_name}] ✓ 字段提取成功（stage={stage}）")
 	return normalized
+
+
+_NORMALIZE_ITEM_MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*(.+?)\s*$")
+
+
+def _split_normalize_item_primary_secondary_text(src_text: str) -> tuple[str, str]:
+	"""
+	/normalize_item: 防第三方字段污染（方案 A）。
+	- PRIMARY_TEXT: 标题 + 正文（可信，优先使用）
+	- SECONDARY_TEXT: 其它输入字段（可能不准，仅用于补全缺失字段）
+
+	约定：标题/正文小节名不固定，但一定包含“标题”“正文”字样（你已确认）。
+	若无法从 Markdown 标题中识别到标题/正文，则不拆分，返回 (原文, "")。
+	"""
+	s = (src_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+	if not s:
+		return "", ""
+
+	lines = s.split("\n")
+	heading_starts: list[int] = []
+	heading_titles: list[str] = []
+	for i, ln in enumerate(lines):
+		m = _NORMALIZE_ITEM_MD_HEADING_RE.match(ln)
+		if not m:
+			continue
+		heading_starts.append(i)
+		heading_titles.append((m.group(1) or "").strip())
+
+	if not heading_starts:
+		return s, ""
+
+	# Build sections [start, end)
+	sections: list[tuple[str, str, str]] = []
+	for idx, start in enumerate(heading_starts):
+		end = heading_starts[idx + 1] if idx + 1 < len(heading_starts) else len(lines)
+		heading = heading_titles[idx]
+		content = "\n".join(lines[start + 1 : end]).strip()
+		raw = "\n".join(lines[start:end]).strip()
+		sections.append((heading, content, raw))
+
+	title_idx: int | None = None
+	body_idx: int | None = None
+	for i, (heading, _content, _raw) in enumerate(sections):
+		if body_idx is None and ("正文" in heading):
+			body_idx = i
+			continue
+		if title_idx is None and ("标题" in heading) and ("正文" not in heading):
+			title_idx = i
+
+	if title_idx is None and body_idx is None:
+		return s, ""
+
+	primary_parts: list[str] = []
+	if title_idx is not None:
+		title = (sections[title_idx][1] or "").strip()
+		if title:
+			primary_parts.append(f"【标题】\n{title}")
+	if body_idx is not None:
+		body = (sections[body_idx][1] or "").strip()
+		if body:
+			primary_parts.append(f"【正文】\n{body}")
+
+	primary = "\n\n".join(primary_parts).strip()
+	if not primary:
+		return s, ""
+
+	secondary_parts: list[str] = []
+	pre = "\n".join(lines[: heading_starts[0]]).strip()
+	if pre:
+		secondary_parts.append(pre)
+
+	for i, (_heading, _content, raw) in enumerate(sections):
+		if i == title_idx or i == body_idx:
+			continue
+		raw = (raw or "").strip()
+		if raw:
+			secondary_parts.append(raw)
+
+	secondary = "\n\n".join(secondary_parts).strip()
+	return primary, secondary
 
 
 async def extract_fields_from_text(
@@ -1212,7 +1307,7 @@ async def extract_fields_from_text(
 	if not extract_prompt or not fields:
 		return {}
 
-	empty_result = {f.key: TYPE_DEFAULTS.get(f.type, "") for f in fields}
+	empty_result = {f.key: (True if f.key == "isEquipment" else TYPE_DEFAULTS.get(f.type, "")) for f in fields}
 	text = (text or "").strip()
 	if not text:
 		return empty_result
@@ -1224,6 +1319,11 @@ async def extract_fields_from_text(
 		text = text[:max_chars]
 
 	include_estimated_amount = any(getattr(f, "key", "") == "estimatedAmount" for f in fields)
+	include_is_equipment = any(getattr(f, "key", "") == "isEquipment" for f in fields)
+
+	primary_text, secondary_text = ("", "")
+	if site_name == "normalize_item":
+		primary_text, secondary_text = _split_normalize_item_primary_secondary_text(text)
 
 	system_prompt = f"""
 You are an information extraction engine.
@@ -1235,11 +1335,29 @@ No markdown, no code fences, no extra text.
 
 Rules:
 - Treat the input as plain text; do not require it to be valid JSON.
-- The input may be a Markdown document with sections like "### 标题"/"### 正文"/"### 发布时间". Treat section headings as field names and prioritize those sections when present.
+- The input may be a Markdown document with section headings. The heading names are not fixed; treat headings as field names.
 - Fill missing fields with the correct empty value by type (string=\"\", number=null, array=[], boolean=false).
 - Money amounts are in 单位“元” (convert 万/亿 to 元 if needed).
 - Dates are YYYY-MM-DD.
 """.strip()
+
+	if include_is_equipment:
+		system_prompt += (
+			"\n\n"
+			"Special rule for isEquipment:\n"
+			"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
+			"- If uncertain, output true.\n"
+		)
+
+	if site_name == "normalize_item" and primary_text:
+		system_prompt += (
+			"\n\n"
+			"Special rule for /normalize_item input priority:\n"
+			"- If PRIMARY_TEXT is provided (title + body), treat it as authoritative.\n"
+			"- SECONDARY_TEXT may contain third-party parsed fields and may be WRONG.\n"
+			"  Only use SECONDARY_TEXT to fill fields that are missing from PRIMARY_TEXT.\n"
+			"- If there is any conflict between PRIMARY_TEXT and SECONDARY_TEXT, ALWAYS trust PRIMARY_TEXT.\n"
+		)
 
 	if include_estimated_amount:
 		system_prompt += (
@@ -1247,18 +1365,28 @@ Rules:
 			"Special rule for estimatedAmount:\n"
 			"- estimatedAmount MUST be a range string \"lo~hi\" in yuan (both sides are numbers; no commas).\n"
 			"  Do NOT output a single number; if only one amount is known, output \"x~x\".\n"
+			"- Use Arabic numerals only; do NOT use scientific notation; do NOT include spaces or unit words.\n"
 			"- Priority (high -> low):\n"
 			"  1) If there is an explicit awarded/winning/transaction amount in the input (e.g. 中标金额/成交金额/定标金额/授标金额),\n"
 			"     set estimatedAmount to that amount as \"x~x\".\n"
 			"     Prefer the winning supplier's amount; if missing, use the first winning-candidate bid price as fallback.\n"
 			"  2) Otherwise, if procurement items / BOQ / service scope exist (标的物/采购清单/服务范围),\n"
-			"     estimate a reasonable TOTAL amount in yuan as a range \"lo~hi\".\n"
+			"     you MUST output a NON-empty reasonable TOTAL amount in yuan as a range \"lo~hi\".\n"
+			"     Even if no explicit unit price/budget is provided, you MAY use common market price knowledge based on item type/category,\n"
+			"     and choose a conservative WIDE range when uncertain (do NOT return empty).\n"
 			"  3) Otherwise output empty string (do not guess).\n"
-			"- The estimate MUST be derived mainly from the procurement items (标的物), quantities, specs, service scope, and similar signals.\n"
+			"- Ignore non-money ranges such as 1.4~3m3, date ranges, model parameter ranges, etc.\n"
+			"- The estimate SHOULD be derived mainly from the procurement items (标的物), quantities, specs, service scope, and similar signals.\n"
 			"  Do NOT use irrelevant fees (e.g. document price, service fee, deposit, CA/platform fees) as the estimate.\n"
 		)
 
-	user_prompt = f"SOURCE_TEXT:\\n{text}"
+	if site_name == "normalize_item" and primary_text:
+		if secondary_text:
+			user_prompt = f"PRIMARY_TEXT:\\n{primary_text}\\n\\nSECONDARY_TEXT:\\n{secondary_text}"
+		else:
+			user_prompt = f"PRIMARY_TEXT:\\n{primary_text}"
+	else:
+		user_prompt = f"SOURCE_TEXT:\\n{text}"
 
 	try:
 		Schema = build_extract_fields_model(fields, model_name=f"ExtractFieldsText_{Path(fields_path).stem}_{stage}")
@@ -1277,7 +1405,8 @@ Rules:
 	extracted = result.model_dump() if hasattr(result, "model_dump") else {}
 	normalized: dict = {}
 	for f in fields:
-		raw_value = extracted.get(f.key, TYPE_DEFAULTS.get(f.type, ""))
+		default_value = True if f.key == "isEquipment" else TYPE_DEFAULTS.get(f.type, "")
+		raw_value = extracted.get(f.key, default_value)
 		normalized[f.key] = normalize_field_value(f.key, raw_value, f.type)
 
 	logger.info(f"[{site_name}] ✓ 字段提取成功（stage={stage}）")
@@ -1407,6 +1536,13 @@ def normalize_field_value(key: str, value: Any, field_type: str):
 	if field_type == "boolean":
 		if isinstance(value, bool):
 			return value
+		if key == "isEquipment":
+			# 召回优先：不确定/缺失时默认 true
+			if value is None:
+				return True
+			s0 = str(value).strip().lower()
+			if s0 in {"", "null", "none", "未知", "不确定"}:
+				return True
 		s = str(value).strip().lower()
 		return s in {"true", "1", "yes", "是"}
 
@@ -2332,8 +2468,12 @@ def create_save_detail_tools(
 			#      - 其次第一位中标/中标候选人报价（lotCandidates[].candidatePrices）
 			#   2) 若无中标金额但有标的物：保留 LLM 预估价（需为范围 "lo~hi"）
 			#   3) 若无中标金额且无标的物：返回 ""
-			# 本阶段只做：按上述优先级覆盖/清空 + 正则校验（不做任何兜底/推导/再调用）。
-			apply_estimated_amount_policy(result_data)
+			# 本阶段：先按优先级覆盖/清空 + 正则校验；必要时在 lotProducts 提取完成后再派生 estimatedAmount。
+			await fill_estimated_amount_after_lots(
+				result_data,
+				site_name=site_name,
+				fields_path="extract_fields.yaml",
+			)
 
 			# 地址字段：不再用正则拆分；改为一次调用 LLM 从三组 AddressDetail 提取 12 个字段。
 			# 规则：
