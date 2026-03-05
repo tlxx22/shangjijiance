@@ -3,7 +3,6 @@ import requests
 import time
 import hashlib
 
-
 def jy_fetch(appid:str = 'jyGy5XQAEEAgRbTUNPKyRU',key_secret:str='I3761u5n',next_page:str=None):
       """ 剑鱼数据获取 返回json数据"""
       url = "https://api.jianyu360.com/data/getalldata"
