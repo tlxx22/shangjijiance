@@ -214,7 +214,7 @@ async def browser_billing():
 
 @app.get("/jy_fetch")
 async def jy_fetch(
-    timestamp:  Optional[str] = Header(None, description="时间戳")
+    timestamp:  Optional[str] = Query(None, description="时间戳")
     ,signature: Optional[str] = Query(None, description="签名")
     ,next_page: Optional[str] = Query(None, description="下一页token")):
     """ 剑鱼数据获取 返回json数据"""
