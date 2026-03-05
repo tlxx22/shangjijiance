@@ -213,9 +213,12 @@ async def browser_billing():
     return browser_billing_logic()
 
 @app.get("/jy_fetch")
-async def jy_fetch(next_page: Optional[str] = Query(None, description="下一页token")):
+async def jy_fetch(
+    timestamp:  Optional[str] = Header(None, description="时间戳")
+    ,signature: Optional[str] = Query(None, description="签名")
+    ,next_page: Optional[str] = Query(None, description="下一页token")):
     """ 剑鱼数据获取 返回json数据"""
-    return jy_fetch_logic(next_page=next_page)
+    return jy_fetch_logic(timestamp=timestamp,signature=signature,next_page=next_page)
 
 
 @app.post("/embedding", response_model=EmbeddingResponse)
