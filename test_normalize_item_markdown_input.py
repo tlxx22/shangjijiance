@@ -69,6 +69,45 @@ class TestNormalizeItemMarkdownInput(unittest.TestCase):
 		self.assertNotIn("### 公告标题", secondary)
 		self.assertNotIn("### 公告正文", secondary)
 
+	def test_announcement_date_prefers_secondary_in_prompt(self):
+		import asyncio
+		from unittest.mock import patch
+
+		from src.custom_tools import extract_fields_from_text
+
+		captured: dict[str, object] = {}
+
+		async def stub_ainvoke(messages, Schema):  # noqa: N802 - keep arg name aligned with caller
+			captured["messages"] = messages
+			return Schema()
+
+		md = (
+			"### 公告标题\n"
+			"这里是标题\n\n"
+			"### 公告正文\n"
+			"正文里可能有多个日期：开标 2026-03-12，正文末尾 2026-03-03。\n\n"
+			"### 发布时间\n"
+			"2026-03-01\n"
+		)
+
+		with patch("src.custom_tools.ainvoke_structured", new=stub_ainvoke):
+			asyncio.run(
+				extract_fields_from_text(
+					md,
+					site_name="normalize_item",
+					stage="meta",
+					fields_path="normalize_item_meta_flat_fields.yaml",
+				)
+			)
+
+		messages = captured.get("messages") or []
+		self.assertEqual(len(messages), 2)
+		system_prompt = messages[0]["content"]
+		user_prompt = messages[1]["content"]
+		self.assertIn("Exception (announcementDate): prefer SECONDARY_TEXT", system_prompt)
+		self.assertIn("PRIMARY_TEXT:", user_prompt)
+		self.assertIn("SECONDARY_TEXT:", user_prompt)
+
 	def test_is_equipment_default_true_without_llm(self):
 		import asyncio
 

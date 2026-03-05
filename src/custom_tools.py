@@ -1320,6 +1320,7 @@ async def extract_fields_from_text(
 
 	include_estimated_amount = any(getattr(f, "key", "") == "estimatedAmount" for f in fields)
 	include_is_equipment = any(getattr(f, "key", "") == "isEquipment" for f in fields)
+	include_announcement_date = any(getattr(f, "key", "") == "announcementDate" for f in fields)
 
 	primary_text, secondary_text = ("", "")
 	if site_name == "normalize_item":
@@ -1353,11 +1354,25 @@ Rules:
 		system_prompt += (
 			"\n\n"
 			"Special rule for /normalize_item input priority:\n"
-			"- If PRIMARY_TEXT is provided (title + body), treat it as authoritative.\n"
+			"- If PRIMARY_TEXT is provided (title + body), treat it as authoritative for most fields.\n"
 			"- SECONDARY_TEXT may contain third-party parsed fields and may be WRONG.\n"
-			"  Only use SECONDARY_TEXT to fill fields that are missing from PRIMARY_TEXT.\n"
-			"- If there is any conflict between PRIMARY_TEXT and SECONDARY_TEXT, ALWAYS trust PRIMARY_TEXT.\n"
 		)
+		if include_announcement_date:
+			system_prompt += (
+				"- Default: fill fields from PRIMARY_TEXT first; use SECONDARY_TEXT only to fill missing fields.\n"
+				"- Exception (announcementDate): prefer SECONDARY_TEXT.\n"
+				"  - First try to extract announcementDate from SECONDARY_TEXT if it contains an explicitly labeled publish date metadata field,\n"
+				"    such as 发布时间/发布日期/公告日期/公告时间.\n"
+				"  - If SECONDARY_TEXT provides a clear publish date, use it as announcementDate EVEN IF PRIMARY_TEXT contains other dates.\n"
+				"  - Only if SECONDARY_TEXT has no clear publish date, fallback to PRIMARY_TEXT's explicitly labeled publish date.\n"
+				"  - Do NOT infer announcementDate from arbitrary dates in the body.\n"
+				"- For other fields, if there is any conflict between PRIMARY_TEXT and SECONDARY_TEXT, ALWAYS trust PRIMARY_TEXT.\n"
+			)
+		else:
+			system_prompt += (
+				"  Only use SECONDARY_TEXT to fill fields that are missing from PRIMARY_TEXT.\n"
+				"- If there is any conflict between PRIMARY_TEXT and SECONDARY_TEXT, ALWAYS trust PRIMARY_TEXT.\n"
+			)
 
 	if include_estimated_amount:
 		system_prompt += (
