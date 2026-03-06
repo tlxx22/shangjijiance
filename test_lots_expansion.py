@@ -1,6 +1,6 @@
 import unittest
 
-from src.custom_tools import compute_data_id, normalize_field_value
+from src.custom_tools import compute_data_id, get_extract_prompt, normalize_field_value
 
 
 class TestLotsExpansion(unittest.TestCase):
@@ -88,7 +88,16 @@ class TestLotsExpansion(unittest.TestCase):
 		payload = {"b": 2, "a": 1}
 		self.assertEqual(compute_data_id(payload), compute_data_id({"a": 1, "b": 2}))
 
+	def test_normalize_item_lots_prompt_keeps_products_in_result_notice(self):
+		prompt = get_extract_prompt("lots", fields_path="normalize_item_meta_flat_fields.yaml")
+		self.assertIn("也必须同步输出对应的 lotProducts", prompt)
+		self.assertIn("不能只输出 lotCandidates", prompt)
+
+	def test_lots_prompt_matches_product_category_by_subjects_only(self):
+		prompt = get_extract_prompt("lots", fields_path="normalize_item_meta_flat_fields.yaml")
+		self.assertIn("只按 subjects", prompt)
+		self.assertIn("不要使用 models/型号参与匹配", prompt)
+
 
 if __name__ == "__main__":
 	unittest.main()
-

@@ -189,11 +189,13 @@ def generate_extract_prompt(
 		lines.append("- lotNumber 必须是“标段号”，格式为“标段一/标段二/...”；若页面未写明，填 \"标段一\"（不要留空）")
 		lines.append("- 严禁把项目编号/招标编号/公告编号（如 CEZB****）填到 lotNumber")
 		lines.append("- lotProducts：每个元素表示一条“标的物行”；其中 unitPrices 为 number(元) 或 null，其余如 subjects/models/quantities/productCategory 为 string；如有多条标的物，输出多个元素（可复用相同 lotNumber/lotName）")
+		lines.append("- 即使是结果公示/评标结果公示/候选公示类正文，只要正文明确出现“包件/标段 + 设备名/物资名”，也必须同步输出对应的 lotProducts；不要只输出 lotCandidates")
+		lines.append("- 抽取 lotProducts 时，不要求同时具备数量/单位/型号；只要设备名/物资名明确，就应先保留该标的物行，缺失字段留空")
 		lines.append("- lotCandidates：每个元素表示一条“单位行”，包含 type（中标/中标候选人/非中标候选人）+ candidates(string) + candidatePrices(number(元) 或 null)；如有多行，输出多个元素")
 		lines.append(
 			"- unitPrices/candidatePrices 单位为“元”；如页面为“万/亿”，必须换算成“元”；如果无法解析为单一金额（如范围/多个值/非金额文本），请返回 null（不要编造）"
 		)
-		lines.append("- productCategory：按“具体产品表”匹配 subjects，匹配到则填该行的标准名称（每行第一个词），匹配不到填 \"\"")
+		lines.append("- productCategory：只按 subjects 与“具体产品表”匹配，匹配到则填该行的标准名称（每行第一个词），匹配不到填 \"\"；不要使用 models/型号参与匹配")
 		lines.append("")
 		lines.append("**具体产品表（用于 productCategory 匹配）**")
 		from .concrete_product_table import format_concrete_product_table_for_prompt
