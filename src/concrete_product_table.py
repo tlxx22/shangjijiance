@@ -61,109 +61,95 @@ PC 钢筋部品生产成套装备,智能钢筋生产线
 
 
 def _parse_table(raw: str) -> list[list[str]]:
-	rows: list[list[str]] = []
-	for line in raw.splitlines():
-		line = line.strip()
-		if not line:
-			continue
+    rows: list[list[str]] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
 
-		parts = [p.strip() for p in re.split(r"[、,，]+", line) if p.strip()]
-		flat_parts: list[str] = []
-		for part in parts:
-			flat_parts.extend([x.strip() for x in re.split(r"\s*/\s*", part) if x.strip()])
+        parts = [p.strip() for p in re.split(r"[、,，]+", line) if p.strip()]
+        flat_parts: list[str] = []
+        for part in parts:
+            flat_parts.extend([x.strip() for x in re.split(r"\s*/\s*", part) if x.strip()])
 
-		seen: set[str] = set()
-		row: list[str] = []
-		for part in flat_parts:
-			if part not in seen:
-				seen.add(part)
-				row.append(part)
+        seen: set[str] = set()
+        row: list[str] = []
+        for part in flat_parts:
+            if part not in seen:
+                seen.add(part)
+                row.append(part)
 
-		if row:
-			rows.append(row)
+        if row:
+            rows.append(row)
 
-	return rows
+    return rows
+
+
+def _build_term_list(table: list[list[str]]) -> list[str]:
+    seen: set[str] = set()
+    terms: list[str] = []
+    for row in table:
+        for term in row:
+            term = term.strip()
+            if term and term not in seen:
+                seen.add(term)
+                terms.append(term)
+    return terms
 
 
 CONCRETE_PRODUCT_TABLE: list[list[str]] = _parse_table(_RAW_CONCRETE_PRODUCT_TABLE)
-
-
-def _build_alias_map(table: list[list[str]]) -> dict[str, str]:
-	alias_map: dict[str, str] = {}
-	for row in table:
-		if not row:
-			continue
-		canonical = row[0]
-		for alias in row:
-			alias = alias.strip()
-			if alias and alias not in alias_map:
-				alias_map[alias] = canonical
-	return alias_map
-
-
-CONCRETE_PRODUCT_ALIAS_TO_CANONICAL: dict[str, str] = _build_alias_map(CONCRETE_PRODUCT_TABLE)
-CONCRETE_PRODUCT_ALIASES_BY_LENGTH: list[str] = sorted(
-	CONCRETE_PRODUCT_ALIAS_TO_CANONICAL.keys(),
-	key=len,
-	reverse=True,
-)
+CONCRETE_PRODUCT_TERMS: list[str] = _build_term_list(CONCRETE_PRODUCT_TABLE)
+CONCRETE_PRODUCT_TERMS_SET: set[str] = set(CONCRETE_PRODUCT_TERMS)
+CONCRETE_PRODUCT_TERMS_BY_LENGTH: list[str] = sorted(CONCRETE_PRODUCT_TERMS, key=len, reverse=True)
 
 
 def format_concrete_product_table_for_prompt(raw_table: str | None = None) -> str:
-	"""
-	用于提示词展示的“具体产品表”。
+    """
+    Format the concrete product table for prompt injection.
 
-	每行第一个词为标准名称（建议 `productCategory` 填写该值）。
-	"""
-	table = CONCRETE_PRODUCT_TABLE
-	if raw_table is not None:
-		text = str(raw_table).strip()
-		if text:
-			try:
-				parsed = _parse_table(text)
-				table = parsed or CONCRETE_PRODUCT_TABLE
-			except Exception:
-				table = CONCRETE_PRODUCT_TABLE
+    All terms in the same row are peer candidates. Line breaks are only for readability.
+    """
+    table = CONCRETE_PRODUCT_TABLE
+    if raw_table is not None:
+        text = str(raw_table).strip()
+        if text:
+            try:
+                parsed = _parse_table(text)
+                table = parsed or CONCRETE_PRODUCT_TABLE
+            except Exception:
+                table = CONCRETE_PRODUCT_TABLE
 
-	lines: list[str] = []
-	for row in table:
-		if not row:
-			continue
-		lines.append(f"- {row[0]}：{'、'.join(row)}")
-	return "\n".join(lines)
+    lines: list[str] = []
+    for row in table:
+        if not row:
+            continue
+        lines.append(f"- {chr(0x3001).join(row)}")
+    return "\n".join(lines)
 
 
 def normalize_concrete_product_name(value: str) -> str:
-	"""
-	将输入归一化为具体产品“标准名称”（若能匹配到表；匹配不到返回空串）。
-	"""
-	text = (value or "").strip()
-	if not text:
-		return ""
-	if text in CONCRETE_PRODUCT_ALIAS_TO_CANONICAL:
-		return CONCRETE_PRODUCT_ALIAS_TO_CANONICAL[text]
+    """
+    Normalize input to the matched concrete product term itself.
+    """
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if text in CONCRETE_PRODUCT_TERMS_SET:
+        return text
 
-	# 容错：如果传入的是逗号分隔等，取第一个能匹配的
-	for part in [p.strip() for p in re.split(r"[、,，/\\s]+", text) if p.strip()]:
-		if part in CONCRETE_PRODUCT_ALIAS_TO_CANONICAL:
-			return CONCRETE_PRODUCT_ALIAS_TO_CANONICAL[part]
+    for part in [p.strip() for p in re.split(r"[、,，/\s]+", text) if p.strip()]:
+        if part in CONCRETE_PRODUCT_TERMS_SET:
+            return part
 
-	# 容错：子串匹配（长词优先）
-	for alias in CONCRETE_PRODUCT_ALIASES_BY_LENGTH:
-		if alias and alias in text:
-			return CONCRETE_PRODUCT_ALIAS_TO_CANONICAL[alias]
+    for term in CONCRETE_PRODUCT_TERMS_BY_LENGTH:
+        if term and term in text:
+            return term
 
-	return ""
+    return ""
 
 
 def match_concrete_product_from_subject(subject: str) -> str:
-	"""
-	从标的物文本中尝试匹配具体产品标准名称；匹配不到返回空串。
-	"""
-	text = (subject or "").strip()
-	if not text:
-		return ""
-	for alias in CONCRETE_PRODUCT_ALIASES_BY_LENGTH:
-		if alias and alias in text:
-			return CONCRETE_PRODUCT_ALIAS_TO_CANONICAL[alias]
-	return ""
+    """
+    Match the most specific concrete product term from subject text.
+    """
+    return normalize_concrete_product_name(subject)

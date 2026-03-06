@@ -487,6 +487,7 @@ from .structured_schemas import build_extract_fields_model
 from .field_schemas import (
 	LotProducts,
 	LotCandidates,
+	supplement_lot_products_from_candidates,
 	try_normalize_announcement_type,
 	_to_yuan,
 	normalize_date_ymd,
@@ -1150,14 +1151,18 @@ Rules:
 		system_prompt += (
 			"\n\n"
 			"Special rule for isEquipment:\n"
+			"- Highest-priority exclusions: if the project is clearly about second-hand / used / idle / scrap equipment procurement or disposal, output false.\n"
+			"  Even if equipment names appear, do NOT output true.\n"
+			"- Highest-priority exclusions: if the project is clearly about agency / intermediary / broker / consulting selection services, such as 招标代理服务、采购代理服务、代理机构选聘、代理中介服务、中介机构选聘, output false.\n"
+			"  Even if equipment names appear in the notice, do NOT output true.\n"
 			"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
 			"- If uncertain, output true.\n"
 		)
 
 	if include_estimated_amount:
-		system_prompt += (
-			"\n\n"
-			"Special rule for estimatedAmount:\n"
+			system_prompt += (
+				"\n\n"
+				"Special rule for estimatedAmount:\n"
 			"- estimatedAmount MUST be a range string \"lo~hi\" in yuan (both sides are numbers; no commas).\n"
 			"  Do NOT output a single number; if only one amount is known, output \"x~x\".\n"
 			"- Use Arabic numerals only; do NOT use scientific notation; do NOT include spaces or unit words.\n"
@@ -1165,15 +1170,26 @@ Rules:
 			"  1) If there is an explicit awarded/winning/transaction amount in the input (e.g. 中标金额/成交金额/定标金额/授标金额),\n"
 			"     set estimatedAmount to that amount as \"x~x\".\n"
 			"     Prefer the winning supplier's amount; if missing, use the first winning-candidate bid price as fallback.\n"
-			"  2) Otherwise, if procurement items / BOQ / service scope exist (标的物/采购清单/服务范围),\n"
-			"     you MUST output a NON-empty reasonable TOTAL amount in yuan as a range \"lo~hi\".\n"
-			"     Even if no explicit unit price/budget is provided, you MAY use common market price knowledge based on item type/category,\n"
-			"     and choose a conservative WIDE range when uncertain (do NOT return empty).\n"
-			"  3) Otherwise output empty string (do not guess).\n"
-			"- Ignore non-money ranges such as 1.4~3m3, date ranges, model parameter ranges, etc.\n"
-			"- The estimate SHOULD be derived mainly from the procurement items (标的物), quantities, specs, service scope, and similar signals.\n"
-			"  Do NOT use irrelevant fees (e.g. document price, service fee, deposit, CA/platform fees) as the estimate.\n"
-		)
+				"  2) Otherwise, if procurement items / BOQ / service scope exist (标的物/采购清单/服务范围),\n"
+				"     you MUST output a NON-empty reasonable TOTAL amount in yuan as a range \"lo~hi\".\n"
+				"     Treat the already extracted structured procurement items as the ONLY source of item identity/scope/specs/quantities.\n"
+				"     Do NOT reconstruct, add, split, or rewrite procurement items from the title/body text.\n"
+				"     Body/title text may be used ONLY to identify explicit price-bound constraints that directly affect the amount range,\n"
+				"     such as maximum price, budget cap, control price, reserve price, minimum price, starting bid, and similar hard money bounds.\n"
+				"     If lotProducts contains placeholder zero values such as unit price = 0, quantity = 0, or total = 0,\n"
+				"     treat them as unknown placeholders, NOT as a valid lower bound of the estimate.\n"
+				"     You MUST estimate from realistic real-world procurement / transaction prices for the same or highly similar items,\n"
+				"     rather than outputting symbolic placeholder numbers just to satisfy the format.\n"
+				"     If the item type is recognizable, the lower bound MUST be a plausible market-purchase lower bound for actually buying the extracted items;\n"
+				"     0, 1, or other tiny placeholder values are invalid unless the input explicitly states such a real price.\n"
+				"     Even if no explicit unit price/budget is provided, you MAY use common market price knowledge based on item type/category,\n"
+				"     and choose a conservative WIDE range when uncertain (do NOT return empty).\n"
+				"     Do not rely on code-style keyword matching; judge semantically from the text itself.\n"
+				"  3) Otherwise output empty string (do not guess).\n"
+				"- Ignore non-money ranges such as 1.4~3m3, date ranges, model parameter ranges, etc.\n"
+				"- Ignore unrelated body information such as contacts, phone numbers, dates/timelines, procedures, qualifications, candidate rankings, scores, and company names unless they directly constrain the amount range.\n"
+				"- Do NOT use irrelevant fees (e.g. document price, service fee, deposit, CA/platform fees) as the estimate.\n"
+			)
 
 	user_prompt = f"HTML:\\n{html}"
 
@@ -1346,6 +1362,10 @@ Rules:
 		system_prompt += (
 			"\n\n"
 			"Special rule for isEquipment:\n"
+			"- Highest-priority exclusions: if the project is clearly about second-hand / used / idle / scrap equipment procurement or disposal, output false.\n"
+			"  Even if equipment names appear, do NOT output true.\n"
+			"- Highest-priority exclusions: if the project is clearly about agency / intermediary / broker / consulting selection services, such as 招标代理服务、采购代理服务、代理机构选聘、代理中介服务、中介机构选聘, output false.\n"
+			"  Even if equipment names appear in the notice, do NOT output true.\n"
 			"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
 			"- If uncertain, output true.\n"
 		)
@@ -1375,9 +1395,9 @@ Rules:
 			)
 
 	if include_estimated_amount:
-		system_prompt += (
-			"\n\n"
-			"Special rule for estimatedAmount:\n"
+			system_prompt += (
+				"\n\n"
+				"Special rule for estimatedAmount:\n"
 			"- estimatedAmount MUST be a range string \"lo~hi\" in yuan (both sides are numbers; no commas).\n"
 			"  Do NOT output a single number; if only one amount is known, output \"x~x\".\n"
 			"- Use Arabic numerals only; do NOT use scientific notation; do NOT include spaces or unit words.\n"
@@ -1385,15 +1405,26 @@ Rules:
 			"  1) If there is an explicit awarded/winning/transaction amount in the input (e.g. 中标金额/成交金额/定标金额/授标金额),\n"
 			"     set estimatedAmount to that amount as \"x~x\".\n"
 			"     Prefer the winning supplier's amount; if missing, use the first winning-candidate bid price as fallback.\n"
-			"  2) Otherwise, if procurement items / BOQ / service scope exist (标的物/采购清单/服务范围),\n"
-			"     you MUST output a NON-empty reasonable TOTAL amount in yuan as a range \"lo~hi\".\n"
-			"     Even if no explicit unit price/budget is provided, you MAY use common market price knowledge based on item type/category,\n"
-			"     and choose a conservative WIDE range when uncertain (do NOT return empty).\n"
-			"  3) Otherwise output empty string (do not guess).\n"
-			"- Ignore non-money ranges such as 1.4~3m3, date ranges, model parameter ranges, etc.\n"
-			"- The estimate SHOULD be derived mainly from the procurement items (标的物), quantities, specs, service scope, and similar signals.\n"
-			"  Do NOT use irrelevant fees (e.g. document price, service fee, deposit, CA/platform fees) as the estimate.\n"
-		)
+				"  2) Otherwise, if procurement items / BOQ / service scope exist (标的物/采购清单/服务范围),\n"
+				"     you MUST output a NON-empty reasonable TOTAL amount in yuan as a range \"lo~hi\".\n"
+				"     Treat the already extracted structured procurement items as the ONLY source of item identity/scope/specs/quantities.\n"
+				"     Do NOT reconstruct, add, split, or rewrite procurement items from the title/body text.\n"
+				"     Body/title text may be used ONLY to identify explicit price-bound constraints that directly affect the amount range,\n"
+				"     such as maximum price, budget cap, control price, reserve price, minimum price, starting bid, and similar hard money bounds.\n"
+				"     If lotProducts contains placeholder zero values such as unit price = 0, quantity = 0, or total = 0,\n"
+				"     treat them as unknown placeholders, NOT as a valid lower bound of the estimate.\n"
+				"     You MUST estimate from realistic real-world procurement / transaction prices for the same or highly similar items,\n"
+				"     rather than outputting symbolic placeholder numbers just to satisfy the format.\n"
+				"     If the item type is recognizable, the lower bound MUST be a plausible market-purchase lower bound for actually buying the extracted items;\n"
+				"     0, 1, or other tiny placeholder values are invalid unless the input explicitly states such a real price.\n"
+				"     Even if no explicit unit price/budget is provided, you MAY use common market price knowledge based on item type/category,\n"
+				"     and choose a conservative WIDE range when uncertain (do NOT return empty).\n"
+				"     Do not rely on code-style keyword matching; judge semantically from the text itself.\n"
+				"  3) Otherwise output empty string (do not guess).\n"
+				"- Ignore non-money ranges such as 1.4~3m3, date ranges, model parameter ranges, etc.\n"
+				"- Ignore unrelated body information such as contacts, phone numbers, dates/timelines, procedures, qualifications, candidate rankings, scores, and company names unless they directly constrain the amount range.\n"
+				"- Do NOT use irrelevant fees (e.g. document price, service fee, deposit, CA/platform fees) as the estimate.\n"
+			)
 
 	if site_name == "normalize_item" and primary_text:
 		if secondary_text:
@@ -2421,6 +2452,7 @@ def create_save_detail_tools(
 				lot_products = []
 			if not isinstance(lot_candidates, list):
 				lot_candidates = []
+			lot_products = supplement_lot_products_from_candidates(lot_products, lot_candidates)
 
 			# 7. 生成唯一文件名（使用列表页日期做文件分组）
 			filename = get_unique_filename(output_dir, title, file_date)
@@ -2647,3 +2679,4 @@ def create_save_detail_tools(
 		return await save_detail(params=SaveDetailParams(title=title, date=date), browser_session=browser_session)
 
 	return tools
+

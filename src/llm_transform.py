@@ -11,6 +11,7 @@ from .announcement_type_repair import AnnouncementTypeRepairError, repair_announ
 from .estimated_amount_deriver import fill_estimated_amount_after_lots
 from .field_schemas import (
 	ANNOUNCEMENT_TYPES,
+	supplement_lot_products_from_candidates,
 	try_normalize_announcement_type,
 )
 
@@ -107,6 +108,10 @@ def _normalize_item_to_crawler_schema(raw_item: dict[str, Any]) -> dict[str, Any
 	for f in load_extract_fields(stage=None):
 		item[f.key] = normalize_field_value(f.key, item.get(f.key), f.type)
 
+	item["lotProducts"] = supplement_lot_products_from_candidates(
+		item.get("lotProducts"),
+		item.get("lotCandidates"),
+	)
 	item["announcementType"] = try_normalize_announcement_type(item.get("announcementType")) or ""
 	return item
 

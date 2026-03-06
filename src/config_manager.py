@@ -195,7 +195,7 @@ def generate_extract_prompt(
 		lines.append(
 			"- unitPrices/candidatePrices 单位为“元”；如页面为“万/亿”，必须换算成“元”；如果无法解析为单一金额（如范围/多个值/非金额文本），请返回 null（不要编造）"
 		)
-		lines.append("- productCategory：只按 subjects 与“具体产品表”匹配，匹配到则填该行的标准名称（每行第一个词），匹配不到填 \"\"；不要使用 models/型号参与匹配")
+		lines.append("- productCategory：只按 subjects 与“具体产品表”匹配，直接填写表中与 subjects 语义最贴近、最具体的那个候选项本身。表中所有词都是平级候选项，换行仅为阅读方便，不表示首词优先；匹配不到填 \"\"；不要使用 models/型号参与匹配")
 		lines.append("")
 		lines.append("**具体产品表（用于 productCategory 匹配）**")
 		from .concrete_product_table import format_concrete_product_table_for_prompt

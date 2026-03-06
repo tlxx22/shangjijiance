@@ -108,6 +108,62 @@ class TestNormalizeItemMarkdownInput(unittest.TestCase):
 		self.assertIn("PRIMARY_TEXT:", user_prompt)
 		self.assertIn("SECONDARY_TEXT:", user_prompt)
 
+	def test_try_normalize_announcement_type_prefers_qna_for_clarification_keywords(self):
+		from src.field_schemas import try_normalize_announcement_type
+
+		self.assertEqual(try_normalize_announcement_type("招标文件澄清公告"), "答疑")
+		self.assertEqual(try_normalize_announcement_type("关于某项目的澄清文件"), "答疑")
+		self.assertEqual(try_normalize_announcement_type("疑问回复"), "答疑")
+		self.assertEqual(try_normalize_announcement_type("招标文件澄清/变更公告"), "答疑")
+
+	def test_announcement_type_prompt_marks_clarification_as_qna(self):
+		from src.custom_tools import get_extract_prompt
+
+		prompt = get_extract_prompt("meta", fields_path="normalize_item_meta_flat_fields.yaml")
+		self.assertIn("澄清公告/澄清文件/澄清通知/答疑公告/疑问回复/问题答复", prompt)
+		self.assertIn("优先判为“答疑”", prompt)
+
+	def test_estimated_amount_prompt_only_uses_body_for_price_bounds(self):
+		import asyncio
+		from unittest.mock import patch
+
+		from src.custom_tools import extract_fields_from_text
+
+		captured: dict[str, object] = {}
+
+		async def stub_ainvoke(messages, Schema):  # noqa: N802 - keep arg name aligned with caller
+			captured["messages"] = messages
+			return Schema()
+
+		md = (
+			"### 标题\n"
+			"矿用地下自卸车采购项目\n\n"
+			"### 正文\n"
+			"正文里有设备名，也有最高限价189.3万元。\n\n"
+			"### 标的物\n"
+			"物资名称：矿用地下自卸车 单价：0 数量：0 总价：0\n"
+		)
+
+		with patch("src.custom_tools.ainvoke_structured", new=stub_ainvoke):
+			asyncio.run(
+				extract_fields_from_text(
+					md,
+					site_name="normalize_item",
+					stage="estimated_amount",
+					fields_path="normalize_item_meta_flat_fields.yaml",
+				)
+			)
+
+		messages = captured.get("messages") or []
+		self.assertEqual(len(messages), 2)
+		system_prompt = messages[0]["content"]
+		self.assertIn("ONLY source of item identity/scope/specs/quantities", system_prompt)
+		self.assertIn("Do NOT reconstruct, add, split, or rewrite procurement items from the title/body text", system_prompt)
+		self.assertIn("Body/title text may be used ONLY to identify explicit price-bound constraints", system_prompt)
+		self.assertIn("unit price = 0, quantity = 0, or total = 0", system_prompt)
+		self.assertIn("realistic real-world procurement / transaction prices", system_prompt)
+		self.assertIn("0, 1, or other tiny placeholder values are invalid", system_prompt)
+
 	def test_is_equipment_default_true_without_llm(self):
 		import asyncio
 
@@ -150,6 +206,15 @@ class TestNormalizeItemMarkdownInput(unittest.TestCase):
 		self.assertEqual(len(hits), 1)
 		self.assertEqual(hits[0].type, "boolean")
 
+	def test_is_equipment_prompt_contains_hard_exclusions(self):
+		from src.custom_tools import get_extract_prompt
+
+		prompt = get_extract_prompt("meta", fields_path="normalize_item_meta_flat_fields.yaml")
+		self.assertIn("最高优先级排除规则", prompt)
+		self.assertIn("二手设备采购", prompt)
+		self.assertIn("招标代理服务", prompt)
+
 
 if __name__ == "__main__":
 	unittest.main()
+

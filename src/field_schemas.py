@@ -67,8 +67,18 @@ ANNOUNCEMENT_TYPE_MAPPING = {
 	"补遗": "变更",
 	# 答疑（含澄清）
 	"答疑公告": "答疑",
+	"答疑文件": "答疑",
+	"答疑通知": "答疑",
+	"答疑澄清": "答疑",
 	"澄清公告": "答疑",
+	"澄清文件": "答疑",
+	"澄清通知": "答疑",
+	"澄清答疑": "答疑",
+	"疑问回复": "答疑",
+	"问题回复": "答疑",
+	"问题答复": "答疑",
 	"澄清": "答疑",
+	"答疑": "答疑",
 	# 候选
 	"候选人公示": "候选",
 	"评标结果公示": "候选",
@@ -115,6 +125,24 @@ def try_normalize_announcement_type(raw: Any) -> str | None:
 		return None
 	if text in ANNOUNCEMENT_TYPES:
 		return text
+
+	for key in (
+		"答疑澄清",
+		"澄清答疑",
+		"澄清公告",
+		"澄清文件",
+		"澄清通知",
+		"答疑公告",
+		"答疑文件",
+		"答疑通知",
+		"疑问回复",
+		"问题回复",
+		"问题答复",
+		"答疑",
+		"澄清",
+	):
+		if key in text:
+			return "答疑"
 
 	for key in sorted(ANNOUNCEMENT_TYPE_MAPPING.keys(), key=len, reverse=True):
 		if key in text:
@@ -428,6 +456,159 @@ def _normalize_yuan_number(v: Any) -> Optional[float]:
 	return _to_yuan(v)
 
 
+_LOT_NUMBER_TOKEN = r"[零〇一二三四五六七八九十百千万两\d]+"
+_LOT_BID_NUMBER_PATTERNS = (
+	re.compile(rf"(?:标段|标包|标)\s*第?\s*(?P<num>{_LOT_NUMBER_TOKEN})"),
+	re.compile(rf"第?\s*(?P<num>{_LOT_NUMBER_TOKEN})\s*(?:标段|标包|标)"),
+)
+_LOT_PACKAGE_NUMBER_PATTERNS = (
+	re.compile(rf"(?:包件|包)\s*第?\s*(?P<num>{_LOT_NUMBER_TOKEN})"),
+	re.compile(rf"第?\s*(?P<num>{_LOT_NUMBER_TOKEN})\s*(?:包件|包)"),
+)
+_LOT_NAME_MARKER_RE = re.compile(
+	rf"(?:(?:标段|标包|标|包件|包)\s*第?\s*{_LOT_NUMBER_TOKEN}|第?\s*{_LOT_NUMBER_TOKEN}\s*(?:标段|标包|标|包件|包))\s*[：:、.．）)】-]*\s*"
+)
+_CHINESE_DIGIT_MAP = {
+	"零": 0,
+	"〇": 0,
+	"一": 1,
+	"二": 2,
+	"两": 2,
+	"三": 3,
+	"四": 4,
+	"五": 5,
+	"六": 6,
+	"七": 7,
+	"八": 8,
+	"九": 9,
+}
+_CHINESE_UNIT_MAP = {
+	"十": 10,
+	"百": 100,
+	"千": 1000,
+	"万": 10000,
+}
+
+
+def _chinese_numeral_to_int(text: str) -> int | None:
+	token = (text or "").strip()
+	if not token:
+		return None
+	if token.isdigit():
+		return int(token)
+	if any(ch not in _CHINESE_DIGIT_MAP and ch not in _CHINESE_UNIT_MAP for ch in token):
+		return None
+	if not any(ch in _CHINESE_UNIT_MAP for ch in token):
+		digits = [str(_CHINESE_DIGIT_MAP[ch]) for ch in token]
+		return int("".join(digits)) if digits else None
+
+	total = 0
+	section = 0
+	number = 0
+	for ch in token:
+		if ch in _CHINESE_DIGIT_MAP:
+			number = _CHINESE_DIGIT_MAP[ch]
+			continue
+		unit = _CHINESE_UNIT_MAP.get(ch)
+		if unit is None:
+			return None
+		if unit == 10000:
+			section = (section + (number or 0)) * unit
+			total += section
+			section = 0
+			number = 0
+			continue
+		if number == 0:
+			number = 1
+		section += number * unit
+		number = 0
+	return total + section + number
+
+
+def _section_to_chinese(section: int) -> str:
+	digits = "零一二三四五六七八九"
+	units = ["", "十", "百", "千"]
+	out = ""
+	unit_pos = 0
+	while section > 0:
+		digit = section % 10
+		if digit == 0:
+			if out and not out.startswith("零"):
+				out = "零" + out
+		else:
+			out = digits[digit] + units[unit_pos] + out
+		unit_pos += 1
+		section //= 10
+	return out.rstrip("零")
+
+
+def _int_to_chinese(num: int) -> str:
+	if num <= 0:
+		return ""
+	parts: list[str] = []
+	big_units = ["", "万", "亿"]
+	unit_pos = 0
+	need_zero = False
+	while num > 0:
+		section = num % 10000
+		if section:
+			part = _section_to_chinese(section)
+			if need_zero and section < 1000:
+				part = "零" + part
+			parts.insert(0, part + (big_units[unit_pos] if unit_pos < len(big_units) else ""))
+			need_zero = section < 1000
+		elif parts:
+			need_zero = True
+		num //= 10000
+		unit_pos += 1
+	text = "".join(parts).strip("零")
+	if text.startswith("一十"):
+		text = text[1:]
+	return text
+
+
+def _normalize_lot_number_token(text: str) -> str | None:
+	num = _chinese_numeral_to_int(text)
+	if num is None or num <= 0:
+		return None
+	chinese = _int_to_chinese(num)
+	if not chinese:
+		return None
+	return f"标段{chinese}"
+
+
+def _infer_lot_number_from_text(text: Any) -> str | None:
+	raw = _join_list(text)
+	if not raw:
+		return None
+	for patterns in (_LOT_BID_NUMBER_PATTERNS, _LOT_PACKAGE_NUMBER_PATTERNS):
+		for pattern in patterns:
+			match = pattern.search(raw)
+			if not match:
+				continue
+			lot_number = _normalize_lot_number_token(match.group("num"))
+			if lot_number:
+				return lot_number
+	return _normalize_lot_number_token(raw)
+
+
+def _extract_subject_from_lot_name(text: Any) -> str:
+	raw = _join_list(text)
+	if not raw:
+		return ""
+	matches = list(_LOT_NAME_MARKER_RE.finditer(raw))
+	if matches:
+		subject = raw[matches[-1].end():]
+	else:
+		subject = re.split(r"[：:]", raw)[-1]
+	subject = re.split(r"[\r\n]+", subject)[0]
+	subject = re.sub(r"^[\s：:、,，;；._-]+|[\s：:、,，;；._-]+$", "", subject)
+	return subject.strip()
+
+
+def _normalize_lot_dedupe_text(text: Any) -> str:
+	return re.sub(r"[\s：:、,，;；._-]+", "", _join_list(text))
+
 # ===== lotProducts =====
 
 class LotProduct(BaseModel):
@@ -443,6 +624,25 @@ class LotProduct(BaseModel):
 	unitPrices: float | None = Field(default=None, validation_alias=AliasChoices("unitPrices", "标的物单价", "单价"))
 	quantities: str = Field(default="", validation_alias=AliasChoices("quantities", "标的物数量", "数量"))
 	quantityUnit: str = Field(default="", validation_alias=AliasChoices("quantityUnit", "quantity_unit", "数量单位", "单位"))
+
+	@model_validator(mode="before")
+	@classmethod
+	def _infer_lot_fields(cls, v: Any):
+		if not isinstance(v, dict):
+			return v
+		nv = dict(v)
+		lot_number_raw = nv.get("lotNumber") or nv.get("lot_number") or nv.get("标段号")
+		lot_name_raw = nv.get("lotName") or nv.get("lot_name") or nv.get("标段名")
+		if not _join_list(lot_number_raw):
+			inferred_lot_number = _infer_lot_number_from_text(lot_name_raw)
+			if inferred_lot_number:
+				nv["lotNumber"] = inferred_lot_number
+		subjects_raw = nv.get("subjects") or nv.get("标的物") or nv.get("description")
+		if not _join_list(subjects_raw):
+			inferred_subject = _extract_subject_from_lot_name(lot_name_raw)
+			if inferred_subject:
+				nv["subjects"] = inferred_subject
+		return nv
 
 	@model_validator(mode="before")
 	@classmethod
@@ -477,7 +677,7 @@ class LotProduct(BaseModel):
 	@classmethod
 	def _lot_number(cls, v: Any) -> str:
 		# 约定：某个详情页一定属于某个标段；若页面未写明，则兜底为“标段一”
-		text = _join_list(v)
+		text = _infer_lot_number_from_text(v)
 		return text or "标段一"
 
 	@field_validator("lotName", mode="before")
@@ -573,12 +773,14 @@ class LotProducts(RootModel[list[LotProduct]]):
 		out: list[dict] = []
 		for item in items:
 			lot_number_raw = _join_list(item.get("lotNumber"))
-			lot_number = lot_number_raw or "标段一"
 			lot_name = _join_list(item.get("lotName"))
+			lot_number = _infer_lot_number_from_text(lot_number_raw) or _infer_lot_number_from_text(lot_name) or "标段一"
 
 			subjects = _join_list(item.get("subjects"))
 			if not subjects:
 				subjects = _join_list(item.get("description"))
+			if not subjects:
+				subjects = _extract_subject_from_lot_name(lot_name)
 			product_category = _join_list(item.get("productCategory"))
 			models = _join_list(item.get("models"))
 			unit_price = _pick_unit_price(item.get("unitPrices"))
@@ -631,10 +833,24 @@ class LotCandidate(BaseModel):
 	candidates: str = Field(default="", validation_alias=AliasChoices("candidates", "候选单位"))
 	candidatePrices: float | None = Field(default=None, validation_alias=AliasChoices("candidatePrices", "候选单位报价", "报价"))
 
+	@model_validator(mode="before")
+	@classmethod
+	def _infer_lot_fields(cls, v: Any):
+		if not isinstance(v, dict):
+			return v
+		nv = dict(v)
+		lot_number_raw = nv.get("lotNumber") or nv.get("lot_number") or nv.get("标段号")
+		lot_name_raw = nv.get("lotName") or nv.get("lot_name") or nv.get("标段名")
+		if not _join_list(lot_number_raw):
+			inferred_lot_number = _infer_lot_number_from_text(lot_name_raw)
+			if inferred_lot_number:
+				nv["lotNumber"] = inferred_lot_number
+		return nv
+
 	@field_validator("lotNumber", mode="before")
 	@classmethod
 	def _lot_number(cls, v: Any) -> str:
-		text = _join_list(v)
+		text = _infer_lot_number_from_text(v)
 		return text or "标段一"
 
 	@field_validator("lotName", mode="before")
@@ -753,8 +969,8 @@ class LotCandidates(RootModel[list[LotCandidate]]):
 		items = _as_list(v)
 		out: list[dict] = []
 		for item in items:
-			lot_number = _join_list(item.get("lotNumber")) or "标段一"
 			lot_name = _join_list(item.get("lotName"))
+			lot_number = _infer_lot_number_from_text(item.get("lotNumber")) or _infer_lot_number_from_text(lot_name) or "标段一"
 			declared_type = _join_list(item.get("type"))
 
 			# Backward compatibility: old schema fields (winner/winningAmount) may still appear.
@@ -795,3 +1011,56 @@ class LotCandidates(RootModel[list[LotCandidate]]):
 					}
 				)
 		return out
+
+def supplement_lot_products_from_candidates(lot_products: Any, lot_candidates: Any) -> list[dict[str, Any]]:
+	"""
+	When result/candidate notices only extract lotCandidates rows, deterministically backfill
+	lotProducts from explicit "标/包 + 设备名/物资名" lotName text.
+	"""
+	products = [item.model_dump() for item in LotProducts.model_validate(lot_products).root]
+	candidates = [item.model_dump() for item in LotCandidates.model_validate(lot_candidates).root]
+
+	existing_subject_keys: set[tuple[str, str]] = set()
+	existing_name_keys: set[tuple[str, str]] = set()
+	for product in products:
+		lot_number = _infer_lot_number_from_text(product.get("lotNumber")) or _infer_lot_number_from_text(product.get("lotName")) or "标段一"
+		product["lotNumber"] = lot_number
+		if not _join_list(product.get("subjects")):
+			product["subjects"] = _extract_subject_from_lot_name(product.get("lotName"))
+		subject_key = _normalize_lot_dedupe_text(product.get("subjects"))
+		name_key = _normalize_lot_dedupe_text(product.get("lotName"))
+		if subject_key:
+			existing_subject_keys.add((lot_number, subject_key))
+		if name_key:
+			existing_name_keys.add((lot_number, name_key))
+
+	for candidate in candidates:
+		lot_name = _join_list(candidate.get("lotName"))
+		if not lot_name:
+			continue
+		lot_number = _infer_lot_number_from_text(candidate.get("lotNumber")) or _infer_lot_number_from_text(lot_name) or "标段一"
+		subjects = _extract_subject_from_lot_name(lot_name)
+		if not subjects:
+			continue
+		subject_key = _normalize_lot_dedupe_text(subjects)
+		name_key = _normalize_lot_dedupe_text(lot_name)
+		if (subject_key and (lot_number, subject_key) in existing_subject_keys) or (name_key and (lot_number, name_key) in existing_name_keys):
+			continue
+		products.append(
+			{
+				"lotNumber": lot_number,
+				"lotName": lot_name,
+				"subjects": subjects,
+				"productCategory": "",
+				"models": "",
+				"unitPrices": None,
+				"quantities": "",
+				"quantityUnit": "",
+			}
+		)
+		if subject_key:
+			existing_subject_keys.add((lot_number, subject_key))
+		if name_key:
+			existing_name_keys.add((lot_number, name_key))
+
+	return products
