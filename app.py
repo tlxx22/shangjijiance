@@ -10,6 +10,9 @@ import json
 import sys
 import uuid
 from pathlib import Path
+from typing import Optional
+from fastapi import Header, Query
+from src.third_rpc import jy_fetch as jy_fetch_logic, browser_billing as browser_billing_logic
 
 # Windows asyncio 兼容性修复：browser-use 需要 ProactorEventLoop 来启动浏览器进程
 if sys.platform == 'win32':
@@ -105,7 +108,6 @@ class CrawlStreamingResponse(StreamingResponse):
 async def health():
     """健康检查"""
     return {"status": "ok"}
-
 
 @app.post("/crawl")
 async def crawl(request: CrawlRequest, http_request: Request):
@@ -204,6 +206,19 @@ async def crawl(request: CrawlRequest, http_request: Request):
     except Exception:
         crawl_lock.release()  # 初始化失败，释放锁
         raise
+
+@app.get("/browser_billing")
+async def browser_billing():
+    """浏览器计费"""
+    return browser_billing_logic()
+
+@app.get("/jy_fetch")
+async def jy_fetch(
+    timestamp:  Optional[str] = Query(None, description="时间戳")
+    ,signature: Optional[str] = Query(None, description="签名")
+    ,next_page: Optional[str] = Query(None, description="下一页token")):
+    """ 剑鱼数据获取 返回json数据"""
+    return jy_fetch_logic(timestamp=timestamp,signature=signature,next_page=next_page)
 
 
 @app.post("/embedding", response_model=EmbeddingResponse)
