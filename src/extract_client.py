@@ -12,6 +12,7 @@ DEFAULT_SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 DEFAULT_SILICONFLOW_EXTRACT_MODEL = "Pro/deepseek-ai/DeepSeek-V3.2"
 
 DEFAULT_SANY_EXTRACT_MODEL = "deepseek-v3.2"
+DEFAULT_SANY_MAX_TOKENS = 8192
 
 DEFAULT_OPENAI_EXTRACT_MODEL = "gpt-5.2"
 
@@ -47,7 +48,11 @@ def chat_completion(messages: list[dict[str, str]], *, model: str | None = None)
 		model_name = (model or os.getenv("SANY_EXTRACT_MODEL") or DEFAULT_SANY_EXTRACT_MODEL).strip()
 
 		client = OpenAI(api_key=api_key, base_url=base_url, default_headers=_get_sany_headers())
-		resp: Any = client.chat.completions.create(model=model_name, messages=messages)
+		resp: Any = client.chat.completions.create(
+			model=model_name,
+			messages=messages,
+			max_tokens=DEFAULT_SANY_MAX_TOKENS,
+		)
 		return (resp.choices[0].message.content or "").strip()
 
 	if route == "openai":

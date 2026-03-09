@@ -14,6 +14,7 @@ DEFAULT_SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 DEFAULT_SILICONFLOW_EXTRACT_MODEL = "Pro/deepseek-ai/DeepSeek-V3.2"
 
 DEFAULT_SANY_EXTRACT_MODEL = "deepseek-v3.2"
+DEFAULT_SANY_MAX_TOKENS = 8192
 
 DEFAULT_OPENAI_EXTRACT_MODEL = "gpt-5.2"
 
@@ -53,38 +54,36 @@ def _get_chat_model_cached(route: str, model_name: str, base_url: str, api_key: 
 	from langchain_openai import ChatOpenAI
 
 	default_headers = _get_sany_headers() if headers_key == "sany" else None
-	# LangChain has renamed some init kwargs across versions. Try common variants for robustness.
+	common_kwargs: dict[str, Any] = {"model": model_name, "temperature": 0}
+	if route == "sany":
+		common_kwargs["max_tokens"] = DEFAULT_SANY_MAX_TOKENS
 	try:
 		return ChatOpenAI(
-			model=model_name,
 			api_key=api_key,
 			base_url=base_url,
 			default_headers=default_headers,
-			temperature=0,
+			**common_kwargs,
 		)
 	except TypeError:
 		try:
 			return ChatOpenAI(
-				model=model_name,
 				api_key=api_key,
 				base_url=base_url,
-				temperature=0,
+				**common_kwargs,
 			)
 		except TypeError:
 			try:
 				return ChatOpenAI(
-					model=model_name,
 					openai_api_key=api_key,
 					openai_api_base=base_url,
 					default_headers=default_headers,
-					temperature=0,
+					**common_kwargs,
 				)
 			except TypeError:
 				return ChatOpenAI(
-					model=model_name,
 					openai_api_key=api_key,
 					openai_api_base=base_url,
-					temperature=0,
+					**common_kwargs,
 				)
 
 
