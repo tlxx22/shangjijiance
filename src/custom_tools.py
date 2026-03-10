@@ -1148,19 +1148,22 @@ Rules:
 """.strip()
 
 	if include_is_equipment:
-		system_prompt += (
-			"\n\n"
-			"Special rule for isEquipment:\n"
-			"- Highest-priority exclusions: if the project is clearly about second-hand / used / idle / scrap equipment procurement or disposal, output false.\n"
-			"  Even if equipment names appear, do NOT output true.\n"
-			"- Highest-priority exclusions: if the project is clearly about agency / intermediary / broker / consulting selection services, such as 招标代理服务、采购代理服务、代理机构选聘、代理中介服务、中介机构选聘, output false.\n"
-			"  Even if equipment names appear in the notice, do NOT output true.\n"
-			"- Highest-priority exclusions: if the project is clearly about equipment rental / leasing / hourly-rate usage (租赁、租用、使用机械、机械租赁、台班、按小时计费), output false.\n"
-			"  Indicators include: per-hour pricing (元/小时), '台班', '使用机械', '租赁', '租用', or payment terms based on usage time rather than ownership transfer.\n"
-			"  Even if equipment names (挖掘机、铲车、装载机, etc.) appear, do NOT output true.\n"
-			"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
-			"- If uncertain, output true.\n"
-		)
+			system_prompt += (
+				"\n\n"
+				"Special rule for isEquipment:\n"
+				"- Highest-priority exclusions: if the project is clearly about second-hand / used / idle / scrap equipment procurement or disposal, output false.\n"
+				"  Even if equipment names appear, do NOT output true.\n"
+				"- Highest-priority exclusions: if the project is clearly about agency / intermediary / broker / consulting selection services, such as 招标代理服务、采购代理服务、代理机构选聘、代理中介服务、中介机构选聘, output false.\n"
+				"  Even if equipment names appear in the notice, do NOT output true.\n"
+				"- Highest-priority exclusions: if the project is clearly about equipment rental / leasing / hourly-rate usage (租赁、租用、使用机械、机械租赁、台班、按小时计费), output false.\n"
+				"  Indicators include: per-hour pricing (元/小时), '台班', '使用机械', '租赁', '租用', or payment terms based on usage time rather than ownership transfer.\n"
+				"  Even if equipment names (挖掘机、铲车、装载机, etc.) appear, do NOT output true.\n"
+				"- Highest-priority exclusions: if the project is clearly about installation-only / installation service / installation works / dismantling / relocation / retrofit for existing equipment, output false.\n"
+				"  Examples include: 设备安装、安装工程、安装服务、安装寻源、拆除迁改, and '稳定土搅拌站安装鲁班二次寻源'.\n"
+				"  Even if equipment names appear, do NOT output true. If the notice is about buying the equipment itself and installation is only ancillary to that purchase, this exclusion does not apply.\n"
+				"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
+				"- If uncertain, output true.\n"
+			)
 
 	if include_estimated_amount:
 			system_prompt += (
@@ -1362,19 +1365,22 @@ Rules:
 """.strip()
 
 	if include_is_equipment:
-		system_prompt += (
-			"\n\n"
-			"Special rule for isEquipment:\n"
-			"- Highest-priority exclusions: if the project is clearly about second-hand / used / idle / scrap equipment procurement or disposal, output false.\n"
-			"  Even if equipment names appear, do NOT output true.\n"
-			"- Highest-priority exclusions: if the project is clearly about agency / intermediary / broker / consulting selection services, such as 招标代理服务、采购代理服务、代理机构选聘、代理中介服务、中介机构选聘, output false.\n"
-			"  Even if equipment names appear in the notice, do NOT output true.\n"
-			"- Highest-priority exclusions: if the project is clearly about equipment rental / leasing / hourly-rate usage (租赁、租用、使用机械、机械租赁、台班、按小时计费), output false.\n"
-			"  Indicators include: per-hour pricing (元/小时), '台班', '使用机械', '租赁', '租用', or payment terms based on usage time rather than ownership transfer.\n"
-			"  Even if equipment names (挖掘机、铲车、装载机, etc.) appear, do NOT output true.\n"
-			"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
-			"- If uncertain, output true.\n"
-		)
+			system_prompt += (
+				"\n\n"
+				"Special rule for isEquipment:\n"
+				"- Highest-priority exclusions: if the project is clearly about second-hand / used / idle / scrap equipment procurement or disposal, output false.\n"
+				"  Even if equipment names appear, do NOT output true.\n"
+				"- Highest-priority exclusions: if the project is clearly about agency / intermediary / broker / consulting selection services, such as 招标代理服务、采购代理服务、代理机构选聘、代理中介服务、中介机构选聘, output false.\n"
+				"  Even if equipment names appear in the notice, do NOT output true.\n"
+				"- Highest-priority exclusions: if the project is clearly about equipment rental / leasing / hourly-rate usage (租赁、租用、使用机械、机械租赁、台班、按小时计费), output false.\n"
+				"  Indicators include: per-hour pricing (元/小时), '台班', '使用机械', '租赁', '租用', or payment terms based on usage time rather than ownership transfer.\n"
+				"  Even if equipment names (挖掘机、铲车、装载机, etc.) appear, do NOT output true.\n"
+				"- Highest-priority exclusions: if the project is clearly about installation-only / installation service / installation works / dismantling / relocation / retrofit for existing equipment, output false.\n"
+				"  Examples include: 设备安装、安装工程、安装服务、安装寻源、拆除迁改, and '稳定土搅拌站安装鲁班二次寻源'.\n"
+				"  Even if equipment names appear, do NOT output true. If the notice is about buying the equipment itself and installation is only ancillary to that purchase, this exclusion does not apply.\n"
+				"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
+				"- If uncertain, output true.\n"
+			)
 
 	if site_name == "normalize_item" and primary_text:
 		system_prompt += (

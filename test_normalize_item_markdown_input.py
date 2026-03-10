@@ -213,6 +213,8 @@ class TestNormalizeItemMarkdownInput(unittest.TestCase):
 		self.assertIn("最高优先级排除规则", prompt)
 		self.assertIn("二手设备采购", prompt)
 		self.assertIn("招标代理服务", prompt)
+		self.assertIn("设备安装", prompt)
+		self.assertIn("稳定土搅拌站安装鲁班二次寻源", prompt)
 
 
 if __name__ == "__main__":
