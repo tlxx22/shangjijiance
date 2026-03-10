@@ -215,6 +215,10 @@ class TestNormalizeItemMarkdownInput(unittest.TestCase):
 		self.assertIn("招标代理服务", prompt)
 		self.assertIn("设备安装", prompt)
 		self.assertIn("稳定土搅拌站安装鲁班二次寻源", prompt)
+		self.assertIn("维修", prompt)
+		self.assertIn("交流变频电牵引采煤机维修结果公告", prompt)
+		self.assertIn("海运费", prompt)
+		self.assertIn("柴油正面吊海运费项目", prompt)
 
 
 if __name__ == "__main__":
