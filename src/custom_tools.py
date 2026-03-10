@@ -491,7 +491,6 @@ from .field_schemas import (
 	try_normalize_announcement_type,
 	_to_yuan,
 	normalize_date_ymd,
-	normalize_estimated_amount,
 )
 from .estimated_amount_deriver import fill_estimated_amount_after_lots
 from .announcement_type_repair import repair_announcement_type
@@ -1176,6 +1175,8 @@ Rules:
 				"\n\n"
 				"Special rule for estimatedAmount:\n"
 			"- estimatedAmount MUST be a range string \"lo~hi\" in yuan (both sides are numbers; no commas).\n"
+			"- The final value is valid ONLY when it is exactly one numeric range like \"100000~120000\".\n"
+			"  Do NOT output units, spaces, commas, Chinese words, prefixes, suffixes, or explanations.\n"
 			"  Do NOT output a single number; if only one amount is known, output \"x~x\".\n"
 			"- Use Arabic numerals only; do NOT use scientific notation; do NOT include spaces or unit words.\n"
 			"- Priority (high -> low):\n"
@@ -1423,6 +1424,8 @@ Rules:
 				"\n\n"
 				"Special rule for estimatedAmount:\n"
 			"- estimatedAmount MUST be a range string \"lo~hi\" in yuan (both sides are numbers; no commas).\n"
+			"- The final value is valid ONLY when it is exactly one numeric range like \"100000~120000\".\n"
+			"  Do NOT output units, spaces, commas, Chinese words, prefixes, suffixes, or explanations.\n"
 			"  Do NOT output a single number; if only one amount is known, output \"x~x\".\n"
 			"- Use Arabic numerals only; do NOT use scientific notation; do NOT include spaces or unit words.\n"
 			"- Priority (high -> low):\n"
@@ -1620,8 +1623,6 @@ def normalize_field_value(key: str, value: Any, field_type: str):
 	text = "" if value is None else str(value).strip()
 	if key in {"announcementDate", "bidOpenDate"}:
 		return normalize_date_ymd(text)
-	if key == "estimatedAmount":
-		return normalize_estimated_amount(text)
 	return text
 
 
