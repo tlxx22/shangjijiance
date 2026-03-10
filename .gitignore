@@ -48,3 +48,7 @@ test*.py
 !test_address_normalizer_foreign.py
 test*.json
 resp.json
+
+# validation dataset
+val.yaml
+validate/

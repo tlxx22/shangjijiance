@@ -1155,6 +1155,9 @@ Rules:
 			"  Even if equipment names appear, do NOT output true.\n"
 			"- Highest-priority exclusions: if the project is clearly about agency / intermediary / broker / consulting selection services, such as 招标代理服务、采购代理服务、代理机构选聘、代理中介服务、中介机构选聘, output false.\n"
 			"  Even if equipment names appear in the notice, do NOT output true.\n"
+			"- Highest-priority exclusions: if the project is clearly about equipment rental / leasing / hourly-rate usage (租赁、租用、使用机械、机械租赁、台班、按小时计费), output false.\n"
+			"  Indicators include: per-hour pricing (元/小时), '台班', '使用机械', '租赁', '租用', or payment terms based on usage time rather than ownership transfer.\n"
+			"  Even if equipment names (挖掘机、铲车、装载机, etc.) appear, do NOT output true.\n"
 			"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
 			"- If uncertain, output true.\n"
 		)
@@ -1366,6 +1369,9 @@ Rules:
 			"  Even if equipment names appear, do NOT output true.\n"
 			"- Highest-priority exclusions: if the project is clearly about agency / intermediary / broker / consulting selection services, such as 招标代理服务、采购代理服务、代理机构选聘、代理中介服务、中介机构选聘, output false.\n"
 			"  Even if equipment names appear in the notice, do NOT output true.\n"
+			"- Highest-priority exclusions: if the project is clearly about equipment rental / leasing / hourly-rate usage (租赁、租用、使用机械、机械租赁、台班、按小时计费), output false.\n"
+			"  Indicators include: per-hour pricing (元/小时), '台班', '使用机械', '租赁', '租用', or payment terms based on usage time rather than ownership transfer.\n"
+			"  Even if equipment names (挖掘机、铲车、装载机, etc.) appear, do NOT output true.\n"
 			"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
 			"- If uncertain, output true.\n"
 		)
