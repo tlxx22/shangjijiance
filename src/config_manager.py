@@ -187,15 +187,24 @@ def generate_extract_prompt(
 		lines.append("**额外规则：**")
 		lines.append("- lotProducts/lotCandidates 必须返回数组；未提及则返回 []")
 		lines.append("- lotNumber 必须是“标段号”，格式为“标段一/标段二/...”；若页面未写明，填 \"标段一\"（不要留空）")
+		lines.append("- 若当前公告里出现多个不同的原始标段/包件标识（如“标1包2”“标1包3”“标1包4”），它们必须视为不同 lot，绝不能合并成同一个 lotNumber；包号不同就是不同 lot")
+		lines.append("- lotNumber 的“标段一/标段二/...”应按当前公告中不同原始 lot 首次出现的顺序依次编号；同一个原始标段/包件在 lotProducts 和 lotCandidates 中必须共用同一个 lotNumber")
+		lines.append("- 判断 lot 是否相同，必须看完整的“标号+包号”组合，而不是只看“标号”；例如“标1包1/标1包2/标1包3/标1包4”分别是 4 个不同 lot")
+		lines.append("- lotName 尽量保留原文中的标段/包件名称；若原文是“标1包2:XXX”，可以完整保留为 lotName，但不要因此把它和“标1包3”合并")
 		lines.append("- 严禁把项目编号/招标编号/公告编号（如 CEZB****）填到 lotNumber")
 		lines.append("- lotProducts：每个元素表示一条“标的物行”；其中 unitPrices 为 number(元) 或 null，其余如 subjects/models/quantities/productCategory 为 string；如有多条标的物，输出多个元素（可复用相同 lotNumber/lotName）")
 		lines.append("- 即使是结果公示/评标结果公示/候选公示类正文，只要正文明确出现“包件/标段 + 设备名/物资名”，也必须同步输出对应的 lotProducts；不要只输出 lotCandidates")
 		lines.append("- 抽取 lotProducts 时，不要求同时具备数量/单位/型号；只要设备名/物资名明确，就应先保留该标的物行，缺失字段留空")
 		lines.append("- lotCandidates：每个元素表示一条“单位行”，包含 type（中标/中标候选人/非中标候选人）+ candidates(string) + candidatePrices(number(元) 或 null)；如有多行，输出多个元素")
+		lines.append("- 若某个 lot 的结果明确写成“另行公告/另行通知/待公告”等占位结论，也必须保留该 lot 的单位行；candidates 直接填写该原文占位词，不要丢掉该 lot")
 		lines.append(
 			"- unitPrices/candidatePrices 单位为“元”；如页面为“万/亿”，必须换算成“元”；如果无法解析为单一金额（如范围/多个值/非金额文本），请返回 null（不要编造）"
 		)
-		lines.append("- productCategory：只按 subjects 与“具体产品表”匹配，直接填写表中与 subjects 语义最贴近、最具体的那个候选项本身。表中所有词都是平级候选项，换行仅为阅读方便，不表示首词优先；匹配不到填 \"\"；不要使用 models/型号参与匹配")
+		lines.append("- productCategory：只允许根据 subjects 本身与“具体产品表”匹配，直接填写表中与 subjects 语义最贴近、最具体的那个候选项本身。表中所有词都是平级候选项，换行仅为阅读方便，不表示首词优先；匹配不到填 \"\"")
+		lines.append("- 严禁使用 models/型号/规格/配套说明/适用对象/用途说明 去推断 productCategory；尤其像“配XX设备用”“适用于XX设备”“XX安装”“XX维修”“XX运输”“XX施工服务”“XX海运费”“XX租赁”里的目标设备或服务对象，都不是本次采购标的的 productCategory")
+		lines.append("- 如果 subjects 是‘阀芯组件/滤芯/密封件/配件/备件/组件’这类部件或通用物料词，且仅靠 subjects 本身无法在具体产品表中稳定匹配到明确品类，则 productCategory 必须返回 \"\"，不要因为 models 里出现了‘液压支架/采煤机/搅拌站/装载机’就回填这些设备品类")
+		lines.append("- 示例：subjects=阀芯组件，models=配ZY15000/30/65D型掩护式液压支架用 => productCategory 必须是 \"\"")
+		lines.append("- 示例：subjects=反冲洗滤芯，models=配ZY13000/24/50D型支撑掩护式液压支架用 => productCategory 必须是 \"\"")
 		lines.append("")
 		lines.append("**具体产品表（用于 productCategory 匹配）**")
 		from .concrete_product_table import format_concrete_product_table_for_prompt
@@ -264,4 +273,3 @@ def load_concurrency_config(path: str = "concurrency_config.yaml") -> Concurrenc
 		return ConcurrencyConfig()
 
 	return ConcurrencyConfig(**raw_config)
-

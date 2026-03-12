@@ -29,6 +29,9 @@ Do not output JSON, Markdown, code fences, field names, explanations, units, spa
 
 Rules:
 - If the input already contains an explicit awarded / winning / transaction / candidate bid amount clue, use it first. If only one exact amount is known, output `X~X`.
+- Otherwise, if the input contains an explicit project-level total budget / procurement budget / overall budget clue, use that total amount for the whole notice. If only one exact amount is known, output `X~X`.
+- If one notice contains both a project-level total budget and several package / lot budgets, the project-level total budget has higher priority for the final whole-notice estimatedAmount. Do NOT convert sibling package budgets into `min~max` in that situation.
+- If there is no project-level total budget but there are several package / lot budgets, estimate the whole-notice amount from the combined package scope. Do NOT use sibling package budgets as lower bound vs upper bound of one range.
 - If lotProducts exists, do not return empty. Even without explicit budget or unit price, you must estimate a reasonable, conservative, and fairly wide total project range based on the procurement items.
 - If there are multiple procurement lines and some quantities are missing, you must still estimate for the whole package instead of returning empty.
 - Zero values, blanks, and placeholders inside lotProducts are not valid lower bounds.
@@ -114,6 +117,9 @@ def build_estimated_amount_source_text(
         "Notes: lotProducts is the only source of item identity, quantity, model, and scope. "
         "Do NOT reconstruct or rewrite procurement items from the body. "
         "If the input already contains an explicit winning / awarded / candidate bid amount clue, use it first; if only one amount is known, output X~X. "
+        "Otherwise, if the input contains a project-level total budget clue, use that total amount for the whole notice; if only one amount is known, output X~X. "
+        "If both a project total budget and package budgets are present, the project total budget wins. Never turn package budgets into a min~max range when a total budget already exists. "
+        "If only multiple package budgets exist, reason about the whole notice from the combined package scope instead of using sibling package budgets as the two ends of one range. "
         "If there are procurement items but no explicit amount, estimate a realistic total range from real-world market prices for the same or highly similar items. "
         "If there are multiple procurement lines and some quantities are missing, you must still estimate a conservative total package range instead of returning empty. "
         "Treat zero unit price / quantity / total values in lotProducts as unknown placeholders, not as a valid lower bound. "

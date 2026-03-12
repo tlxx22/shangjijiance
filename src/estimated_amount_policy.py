@@ -30,14 +30,14 @@ def _pick_candidate_amount(lot_candidates: Any) -> Any:
     Pick a fallback amount clue from lotCandidates.
 
     Priority:
-    1) type == "??"
-    2) type == "?????"
+    1) type == "中标"
+    2) type == "中标候选人"
     3) first non-empty candidatePrices
     """
     if not isinstance(lot_candidates, list):
         return None
 
-    for preferred_type in ("??", "?????"):
+    for preferred_type in ("中标", "中标候选人"):
         for candidate in lot_candidates:
             if not isinstance(candidate, dict):
                 continue
