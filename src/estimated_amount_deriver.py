@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Awaitable, Callable, MutableMapping
 
@@ -8,17 +9,67 @@ from .estimated_amount_policy import (
     is_estimated_amount_range_format,
     pick_estimated_amount_priority_clue,
 )
+from .extract_client import chat_completion
 from .logger_config import get_logger
 
 logger = get_logger()
 
 
-Extractor = Callable[..., Awaitable[dict[str, Any]]]
+Extractor = Callable[..., Awaitable[dict[str, Any] | str]]
 MAX_ESTIMATED_AMOUNT_RETRIES = 5
+
+_ESTIMATED_AMOUNT_SYSTEM_PROMPT = """
+You are an estimated-amount string generator, not a JSON extractor.
+Your entire response must be plain text and can only be one of the following:
+1) `A~B`
+2) empty string
+
+A and B must be Arabic numerals and may contain decimal points. Do not output any other characters.
+Do not output JSON, Markdown, code fences, field names, explanations, units, spaces, commas, currency symbols, prefixes, or suffixes.
+
+Rules:
+- If the input already contains an explicit awarded / winning / transaction / candidate bid amount clue, use it first. If only one exact amount is known, output `X~X`.
+- If lotProducts exists, do not return empty. Even without explicit budget or unit price, you must estimate a reasonable, conservative, and fairly wide total project range based on the procurement items.
+- If there are multiple procurement lines and some quantities are missing, you must still estimate for the whole package instead of returning empty.
+- Zero values, blanks, and placeholders inside lotProducts are not valid lower bounds.
+- Only use hard money bounds from the body, such as budget cap, maximum price, control price, reserve price, starting bid, or minimum price. Ignore contacts, phones, dates, rankings, procedures, and unrelated fees.
+- Ignore non-money ranges such as model ranges, date ranges, or `1.4~3m3`.
+
+Invalid examples: `about 100k`, `10-12?`, `100000 ~ 120000`, `RMB100000~120000`, `estimatedAmount:100000~120000`, `0~0`, `1~1` unless the input explicitly states that exact real amount.
+Valid examples: `100000~120000`, `350000~350000`
+""".strip()
 
 
 def _text_or_empty(value: Any) -> str:
     return "" if value is None else str(value).strip()
+
+
+def _extract_estimated_amount_candidate_output(response: dict[str, Any] | str | None) -> str:
+    if isinstance(response, dict):
+        return _text_or_empty(response.get("estimatedAmount"))
+    return _text_or_empty(response)
+
+
+async def _generate_estimated_amount_text(
+    text: str,
+    *,
+    site_name: str,
+    stage: str,
+    fields_path: str,
+    product_category_table: str | None = None,
+) -> dict[str, Any]:
+    del stage, fields_path, product_category_table
+
+    raw = await asyncio.to_thread(
+        chat_completion,
+        [
+            {"role": "system", "content": _ESTIMATED_AMOUNT_SYSTEM_PROMPT},
+            {"role": "user", "content": text},
+        ],
+    )
+    output = _text_or_empty(raw)
+    logger.info(f"[{site_name}] estimated_amount 生成完成")
+    return {"estimatedAmount": output}
 
 
 def build_estimated_amount_source_text(
@@ -64,9 +115,10 @@ def build_estimated_amount_source_text(
         "Do NOT reconstruct or rewrite procurement items from the body. "
         "If the input already contains an explicit winning / awarded / candidate bid amount clue, use it first; if only one amount is known, output X~X. "
         "If there are procurement items but no explicit amount, estimate a realistic total range from real-world market prices for the same or highly similar items. "
+        "If there are multiple procurement lines and some quantities are missing, you must still estimate a conservative total package range instead of returning empty. "
         "Treat zero unit price / quantity / total values in lotProducts as unknown placeholders, not as a valid lower bound. "
         "Ignore non-money ranges such as 1.4~3m3, dates, phone numbers, rankings, and unrelated fees. "
-        "The final output is valid only when estimatedAmount is a numeric range A~B."
+        "The final output is valid only when estimatedAmount is a numeric range A~B with no spaces. Outputs like 0~0 or 1~1 are invalid placeholders unless the input explicitly states that exact real amount."
     )
     return "\n\n".join(parts).strip()
 
@@ -82,10 +134,10 @@ async def fill_estimated_amount_after_lots(
     Derive estimatedAmount after lotProducts / lotCandidates are finalized.
 
     Rules:
-    1) Do not normalize or coerce the model output into another amount.
+    1) Do not normalize or rewrite the model output.
     2) Only validate whether the output matches A~B after removing spaces.
-    3) If invalid, retry the dedicated estimated_amount stage up to 5 times.
-    4) If all retries still fail, fall back to the first raw model output.
+    3) If invalid, retry the dedicated estimated_amount generation up to 5 times.
+    4) If all retries still fail, fall back to the first raw output.
     """
     try:
         apply_estimated_amount_policy(item)
@@ -102,11 +154,7 @@ async def fill_estimated_amount_after_lots(
         return
 
     if extractor is None:
-        try:
-            from .custom_tools import extract_fields_from_text as extractor  # local import to avoid cycles
-        except Exception as exc:
-            logger.warning(f"[{site_name}] estimatedAmount init failed while importing extractor: {exc}")
-            return
+        extractor = _generate_estimated_amount_text
 
     original_output = _text_or_empty(current_output)
     first_raw_output: str | None = None
@@ -128,9 +176,9 @@ async def fill_estimated_amount_after_lots(
                 fields_path=fields_path,
                 product_category_table=None,
             )
-            candidate_output = out.get("estimatedAmount") if isinstance(out, dict) else item.get("estimatedAmount")
+            candidate_output = _extract_estimated_amount_candidate_output(out)
         except Exception as exc:
-            logger.warning(f"[{site_name}] estimatedAmount LLM attempt {attempt} failed: {exc}")
+            logger.warning(f"[{site_name}] estimatedAmount attempt {attempt} failed: {exc}")
             candidate_output = ""
 
         candidate_text = _text_or_empty(candidate_output)

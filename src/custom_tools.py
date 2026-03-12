@@ -1166,6 +1166,9 @@ Rules:
 				"- Highest-priority exclusions: if the project is clearly about transport / freight / logistics service rather than buying the equipment itself, output false.\n"
 				"  Examples include: 运输、海运费、运费、物流、配送、仓储、货运服务, and '上海振华重工（就上海港机重工）2026年1002001612土耳其一台柴油正面吊海运费项目'.\n"
 				"  Even if equipment names appear, do NOT output true. If the notice is about purchasing a transport vehicle or other equipment itself, this exclusion does not apply.\n"
+				"- Highest-priority exclusions: if the project is clearly about construction service / engineering works / EPC construction / general contracting / professional construction / works defined by drawings or BOQ, output false.\n"
+				"  Indicators include: procurement category like 工程-施工, wording such as 施工服务 / 工程施工 / 施工总承包 / 专业施工 / 施工图及工程量清单内全部工程施工 / 房屋建筑工程施工 / 土建施工, or qualification requirements centered on construction capability rather than equipment ownership transfer.\n"
+				"  Even if equipment names such as 生产线 / 装载机 / 叉车 appear in the title, body, or procurement list, do NOT output true when the project essence is construction service. Example: the notice '2026年杨河乡草产业综合加工项目' with category 工程-施工 and content 本项目施工图及工程量清单内全部工程施工 should be false.\n"
 				"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
 				"- If uncertain, output true.\n"
 			)
@@ -1391,6 +1394,9 @@ Rules:
 				"- Highest-priority exclusions: if the project is clearly about transport / freight / logistics service rather than buying the equipment itself, output false.\n"
 				"  Examples include: 运输、海运费、运费、物流、配送、仓储、货运服务, and '上海振华重工（就上海港机重工）2026年1002001612土耳其一台柴油正面吊海运费项目'.\n"
 				"  Even if equipment names appear, do NOT output true. If the notice is about purchasing a transport vehicle or other equipment itself, this exclusion does not apply.\n"
+				"- Highest-priority exclusions: if the project is clearly about construction service / engineering works / EPC construction / general contracting / professional construction / works defined by drawings or BOQ, output false.\n"
+				"  Indicators include: procurement category like 工程-施工, wording such as 施工服务 / 工程施工 / 施工总承包 / 专业施工 / 施工图及工程量清单内全部工程施工 / 房屋建筑工程施工 / 土建施工, or qualification requirements centered on construction capability rather than equipment ownership transfer.\n"
+				"  Even if equipment names such as 生产线 / 装载机 / 叉车 appear in the title, body, or procurement list, do NOT output true when the project essence is construction service. Example: the notice '2026年杨河乡草产业综合加工项目' with category 工程-施工 and content 本项目施工图及工程量清单内全部工程施工 should be false.\n"
 				"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
 				"- If uncertain, output true.\n"
 			)

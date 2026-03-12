@@ -219,6 +219,9 @@ class TestNormalizeItemMarkdownInput(unittest.TestCase):
 		self.assertIn("交流变频电牵引采煤机维修结果公告", prompt)
 		self.assertIn("海运费", prompt)
 		self.assertIn("柴油正面吊海运费项目", prompt)
+		self.assertIn("施工服务", prompt)
+		self.assertIn("工程-施工", prompt)
+		self.assertIn("2026年杨河乡草产业综合加工项目", prompt)
 
 
 if __name__ == "__main__":

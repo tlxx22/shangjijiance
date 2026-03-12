@@ -2,6 +2,7 @@ import unittest
 
 from src.estimated_amount_deriver import (
     MAX_ESTIMATED_AMOUNT_RETRIES,
+    _extract_estimated_amount_candidate_output,
     build_estimated_amount_source_text,
     fill_estimated_amount_after_lots,
 )
@@ -31,13 +32,10 @@ class TestEstimatedAmountDeriver(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls["n"], 0)
         self.assertEqual(item.get("estimatedAmount"), "100  ~  200")
 
-    async def test_retries_until_valid_range(self):
+    async def test_retries_until_valid_range_with_plain_text_output(self):
         calls = {"n": 0}
         captured = {"texts": []}
-        outputs = [
-            {"estimatedAmount": "about 100k"},
-            {"estimatedAmount": "100000 ~ 120000"},
-        ]
+        outputs = ["about 100k", "100000 ~ 120000"]
 
         async def stub_extractor(text, *_args, **_kwargs):
             captured["texts"].append(text)
@@ -67,7 +65,7 @@ class TestEstimatedAmountDeriver(unittest.IsolatedAsyncioTestCase):
 
         async def stub_extractor(*_args, **_kwargs):
             calls["n"] += 1
-            return {"estimatedAmount": "about 100k"}
+            return "about 100k"
 
         item = {
             "winnerAmount": 123456,
@@ -90,7 +88,7 @@ class TestEstimatedAmountDeriver(unittest.IsolatedAsyncioTestCase):
 
         async def stub_extractor(*_args, **_kwargs):
             calls["n"] += 1
-            return {"estimatedAmount": "1000~2000"}
+            return "1000~2000"
 
         item = {
             "winnerAmount": None,
@@ -121,6 +119,12 @@ class TestEstimatedAmountDeriver(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"subjects": "bulldozer"', text)
         self.assertIn("control price 300000 yuan", text)
         self.assertIn("Previous estimatedAmount output was invalid", text)
+        self.assertIn("you still must estimate a conservative total project range", text)
+
+    def test_extract_estimated_amount_candidate_output_supports_dict_and_text(self):
+        self.assertEqual(_extract_estimated_amount_candidate_output({"estimatedAmount": "1~2"}), "1~2")
+        self.assertEqual(_extract_estimated_amount_candidate_output("3~4"), "3~4")
+        self.assertEqual(_extract_estimated_amount_candidate_output(None), "")
 
 
 if __name__ == "__main__":
