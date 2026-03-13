@@ -482,6 +482,7 @@ async def process_site(
 			total_items = result.get("items_found", 0)
 			pages_processed = result.get("pages_processed", 0)
 			risk_control = result.get("risk_control", False)
+			risk_message = result.get("risk_message", "")
 
 			# 关闭浏览器（仅当本函数创建时）
 			if browser_created_here:
@@ -500,7 +501,8 @@ async def process_site(
 					"status": "risk_control",
 					"items_found": total_items,
 					"pages_processed": pages_processed,
-					"error": "触发风控/反爬机制，已停止处理"
+					"error": "触发风控/反爬机制，已停止处理",
+					"risk_message": risk_message,
 				}
 
 			# 处理完成

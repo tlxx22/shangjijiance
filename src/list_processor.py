@@ -29,6 +29,30 @@ class ProcessResult(BaseModel):
 	risk_control: bool = Field(default=False, description="是否触发风控")
 
 
+def _format_risk_message_from_judgement(judgement: dict | None) -> str:
+	"""
+	基于 browser-use judgement 生成风控说明文本。
+	仅透传已有 failure_reason / reached_captcha / reasoning 信息。
+	"""
+	if not judgement:
+		return ""
+
+	lines: list[str] = []
+
+	failure_reason = str(judgement.get("failure_reason") or "").strip()
+	if failure_reason:
+		lines.append(f"Failure Reason: {failure_reason}")
+
+	if judgement.get("reached_captcha"):
+		lines.append("Captcha Detected: Agent encountered captcha challenges")
+
+	reasoning = str(judgement.get("reasoning") or "").strip()
+	if reasoning:
+		lines.append(reasoning)
+
+	return "\n".join(lines).strip()
+
+
 def count_saved_files(output_dir: Path) -> int:
 	"""
 	统计输出目录中已保存的 JSON 文件数量
@@ -315,6 +339,8 @@ IMPORTANT:
 
 		# 由后端“长时间无返回”策略兜底；这里不再用较小步数上限中断任务。
 		result = await agent.run(max_steps=99999)
+		judgement = result.judgement() if hasattr(result, "judgement") else None
+		risk_message = _format_risk_message_from_judgement(judgement)
 
 		# 保存分析日志到txt文件
 		save_analysis_log(result, output_dir, site_name)
@@ -336,6 +362,12 @@ IMPORTANT:
 
 			if risk_control:
 				logger.warning(f"[{site_name}] ⚠️ 检测到风控，已处理 {pages_processed} 页，保存 {final_count} 条")
+				return {
+					"items_found": final_count,
+					"pages_processed": pages_processed,
+					"risk_control": True,
+					"risk_message": risk_message,
+				}
 			else:
 				logger.info(f"[{site_name}] 处理完成：{pages_processed} 页，保存 {final_count} 条（结构化输出）")
 
@@ -354,13 +386,20 @@ IMPORTANT:
 					return {
 						"items_found": final_count,
 						"pages_processed": result_data.get('pages_processed', 1),
-						"risk_control": True
+						"risk_control": True,
+						"risk_message": risk_message,
 					}
 				pages_processed = result_data.get('pages_processed', 1)
 				risk_control = result_data.get('risk_control', False)
 
 				if risk_control:
 					logger.warning(f"[{site_name}] ⚠️ 检测到风控，已处理 {pages_processed} 页，保存 {final_count} 条")
+					return {
+						"items_found": final_count,
+						"pages_processed": pages_processed,
+						"risk_control": True,
+						"risk_message": risk_message,
+					}
 				else:
 					logger.info(f"[{site_name}] 处理完成：{pages_processed} 页，保存 {final_count} 条（JSON解析）")
 

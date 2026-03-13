@@ -125,7 +125,7 @@ class CrawlSession:
             elif result.get("status") == "risk_control":
                 await self.queue.put({
                     "type": "error",
-                    "message": "触发风控/反爬机制",
+                    "message": result.get("risk_message") or "触发风控/反爬机制",
                     "items_found": result.get("items_found", 0),
                 })
             else:
