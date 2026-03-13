@@ -40,12 +40,7 @@ Thumbs.db
 shangjijiance-api.tar
 
 # 测试文件
-test*.py
-!test_official_startup_notify.py
-!test_normalize_item_markdown_input.py
-!test_lots_expansion.py
-!test_estimated_amount_deriver.py
-!test_address_normalizer_foreign.py
+/test*.py
 test*.json
 resp.json
 
