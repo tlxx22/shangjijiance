@@ -1769,6 +1769,18 @@ def _html_to_clean_markdown(html: str, site_name: str) -> str:
 			"#detail,.detail",
 			"#article,.article",
 			"#post,.post",
+			".article.white",
+			".paragraph-box",
+			".article-materials",
+			".ccui-notice-app-container-detail",
+			".ccui-notice-app-container-detail-body",
+			".ccui-notice-app-container-detail-left",
+			".template-notice-detail-body",
+			".template-notice-detail-left",
+			".notice-detail-ul",
+			".notice-detail-li-con",
+			".notice-detail-li-con.rich-text",
+			".rich-text",
 		):
 			candidate_nodes.extend(body.select(selector))
 
@@ -1790,13 +1802,31 @@ def _html_to_clean_markdown(html: str, site_name: str) -> str:
 			text_len = len(node.get_text(" ", strip=True))
 			if text_len < 200:
 				return -10**9
-			links = node.find_all("a")
+			links = []
+			for a in node.find_all("a"):
+				href_raw = a.get("href") or ""
+				href = str(href_raw).strip().lower()
+				if (
+					not href
+					or href == "#"
+					or href.startswith("javascript:")
+					or href.startswith("mailto:")
+					or href.startswith("tel:")
+				):
+					continue
+				links.append(a)
 			link_text_len = sum(len(a.get_text(" ", strip=True)) for a in links)
 			num_links = len(links)
 			num_li = len(node.find_all("li"))
 			num_tables = len(node.find_all("table"))
+			class_id = f"{node.get('class', [])} {node.get('id', '')}".lower()
+			bonus = 0
+			if re.search(r"(article|paragraph|notice|detail|rich-text|content|material|attachment)", class_id):
+				bonus += 500
+			if re.search(r"(header|footer|nav|breadcrumb|search|menu|help|copy-right|copyright|catalog|classes|service)", class_id):
+				bonus -= 1000
 			# Prefer rich text/tables; penalize navigation-y blocks dominated by links/lists.
-			return text_len - link_text_len * 2 - num_links * 20 - num_li * 5 + num_tables * 80
+			return text_len - link_text_len * 2 - num_links * 20 - num_li * 5 + num_tables * 80 + bonus
 
 		best = max(candidate_nodes, key=_score, default=None)
 		clean_html = str(best) if best is not None else str(body)
@@ -2016,16 +2046,35 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
   function count(el, selector) {
     try { return el.querySelectorAll(selector).length; } catch (e) { return 0; }
   }
+  function countMeaningfulLinks(el) {
+    try {
+      return Array.from(el.querySelectorAll('a[href]')).filter((a) => {
+        const href = (a.getAttribute('href') || '').trim().toLowerCase();
+        return href && href !== '#' && !href.startsWith('javascript:') && !href.startsWith('mailto:') && !href.startsWith('tel:');
+      }).length;
+    } catch (e) { return 0; }
+  }
+  function classIdText(el) {
+    try {
+      const className = typeof el.className === 'string' ? el.className : '';
+      return `${className} ${el.id || ''}`.toLowerCase();
+    } catch (e) { return ''; }
+  }
   function score(el) {
     const t = textOf(el);
     const len = t.length;
+    if (len < 80) return -1e18;
     let hits = 0;
     for (const k of keywords) if (t.includes(k)) hits++;
     // Prefer containers that look like "detail" rather than nav menus.
-    const links = count(el, 'a');
+    const links = countMeaningfulLinks(el);
     const lis = count(el, 'li');
     const tables = count(el, 'table');
-    return hits * 20000 + len + tables * 500 - links * 200 - lis * 50;
+    const classId = classIdText(el);
+    let bonus = 0;
+    if (/(article|paragraph|notice|detail|rich-text|content|material|attachment)/.test(classId)) bonus += 3000;
+    if (/(header|footer|nav|breadcrumb|search|menu|help|copy-right|copyright|catalog|classes|service)/.test(classId)) bonus -= 6000;
+    return hits * 20000 + len + tables * 500 - links * 200 - lis * 50 + bonus;
   }
 
   // 1) Fast path: common detail containers
@@ -2033,6 +2082,11 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
     'article', 'main', "[role='main']",
     '#detail', '.detail', '.detail-content', '.detailCon', '.detail-con',
     '.notice-detail', '.noticeDetail', '.notice-detail-content',
+    '.article', '.article.white', '.paragraph-box', '.article-materials',
+    '.ccui-notice-app-container-detail', '.ccui-notice-app-container-detail-body',
+    '.ccui-notice-app-container-detail-left', '.template-notice-detail-body',
+    '.template-notice-detail-left', '.notice-detail-ul',
+    '.notice-detail-li-con', '.notice-detail-li-con.rich-text', '.rich-text',
     '#content', '.content', '#main', '.main'
   ];
   let best = null;
