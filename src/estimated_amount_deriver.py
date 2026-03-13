@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -33,12 +33,14 @@ Rules:
 - If one notice contains both a project-level total budget and several package / lot budgets, the project-level total budget has higher priority for the final whole-notice estimatedAmount. Do NOT convert sibling package budgets into `min~max` in that situation.
 - If there is no project-level total budget but there are several package / lot budgets, estimate the whole-notice amount from the combined package scope. Do NOT use sibling package budgets as lower bound vs upper bound of one range.
 - If lotProducts exists, do not return empty. Even without explicit budget or unit price, you must estimate a reasonable, conservative, and fairly wide total project range based on the procurement items.
+- This rule does NOT depend on whether the notice is an equipment purchase. Even if the extracted scope is repair, maintenance, installation, transport, engineering service, or any other service-type subject, you must still estimate the total transaction/service amount range for the extracted scope instead of returning empty.
 - If there are multiple procurement lines and some quantities are missing, you must still estimate for the whole package instead of returning empty.
 - Zero values, blanks, and placeholders inside lotProducts are not valid lower bounds.
 - Only use hard money bounds from the body, such as budget cap, maximum price, control price, reserve price, starting bid, or minimum price. Ignore contacts, phones, dates, rankings, procedures, and unrelated fees.
 - Ignore non-money ranges such as model ranges, date ranges, or `1.4~3m3`.
+- Bare `~`, `100000~`, `~120000`, or any output with an empty left/right bound is always invalid.
 
-Invalid examples: `about 100k`, `10-12?`, `100000 ~ 120000`, `RMB100000~120000`, `estimatedAmount:100000~120000`, `0~0`, `1~1` unless the input explicitly states that exact real amount.
+Invalid examples: `about 100k`, `10-12?`, `100000 ~ 120000`, `RMB100000~120000`, `estimatedAmount:100000~120000`, `~`, `100000~`, `~120000`, `0~0`, `1~1` unless the input explicitly states that exact real amount.
 Valid examples: `100000~120000`, `350000~350000`
 """.strip()
 
@@ -121,10 +123,11 @@ def build_estimated_amount_source_text(
         "If both a project total budget and package budgets are present, the project total budget wins. Never turn package budgets into a min~max range when a total budget already exists. "
         "If only multiple package budgets exist, reason about the whole notice from the combined package scope instead of using sibling package budgets as the two ends of one range. "
         "If there are procurement items but no explicit amount, estimate a realistic total range from real-world market prices for the same or highly similar items. "
+        "Even if the extracted scope is repair, maintenance, installation, transport, or construction/service scope, you must still estimate the total transaction/service amount range for the extracted scope instead of returning empty. "
         "If there are multiple procurement lines and some quantities are missing, you must still estimate a conservative total package range instead of returning empty. "
         "Treat zero unit price / quantity / total values in lotProducts as unknown placeholders, not as a valid lower bound. "
         "Ignore non-money ranges such as 1.4~3m3, dates, phone numbers, rankings, and unrelated fees. "
-        "The final output is valid only when estimatedAmount is a numeric range A~B with no spaces. Outputs like 0~0 or 1~1 are invalid placeholders unless the input explicitly states that exact real amount."
+        "The final output is valid only when estimatedAmount is a numeric range A~B with no spaces. Outputs like ~, 100000~, ~120000, 0~0, or 1~1 are invalid placeholders unless the input explicitly states that exact real amount."
     )
     return "\n\n".join(parts).strip()
 
@@ -199,3 +202,5 @@ async def fill_estimated_amount_after_lots(
             previous_invalid_output = candidate_text
 
     item["estimatedAmount"] = first_raw_output if first_raw_output is not None else original_output
+
+

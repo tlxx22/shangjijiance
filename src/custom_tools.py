@@ -1,4 +1,4 @@
-"""
+﻿"""
 自定义工具模块
 提供公告正文原始内容提取、文件名处理等工具函数
 """
@@ -2722,4 +2722,5 @@ def create_save_detail_tools(
 		return await save_detail(params=SaveDetailParams(title=title, date=date), browser_session=browser_session)
 
 	return tools
+
 
