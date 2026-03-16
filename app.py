@@ -23,9 +23,6 @@ if sys.platform == 'win32':
 from dotenv import load_dotenv
 load_dotenv()
 
-os.environ.setdefault("TIMEOUT_BrowserStartEvent", "60")
-os.environ.setdefault("TIMEOUT_BrowserLaunchEvent", "60")
-
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
