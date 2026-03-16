@@ -20,22 +20,5 @@ accesslog = "-"
 errorlog = "-"
 loglevel = "info"
 
-
-def when_ready(server):
-    """
-    Gunicorn master hook (runs once per master start).
-    Send Feishu startup notification ONLY in sany_official environment.
-    """
-    try:
-        cfg = getattr(server, "cfg", None)
-        server_meta = {
-            "pid": str(getattr(server, "pid", "") or os.getpid()),
-            "workers": str(getattr(cfg, "workers", "") or ""),
-            "bind": str(getattr(cfg, "bind", "") or ""),
-        }
-        from src.official_startup_notify import notify_startup_async
-
-        notify_startup_async(server_meta=server_meta, timeout_s=3.0)
-    except Exception:
-        # Must never fail the service startup.
-        pass
+# 三一正式环境启动通知已迁移到 deploy/entrypoint.sh，
+# 避免 legacy_gunicorn 模式与统一启动入口重复发送。

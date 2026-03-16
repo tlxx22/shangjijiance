@@ -220,7 +220,7 @@ with requests.post(url, json=payload, stream=True) as r:
 
 ## 备注
 
-- **并发控制**：每个 Worker 同时只处理一个爬取任务，超出时返回 429
+- **并发控制**：每个内部 Worker 同时只处理一个爬取任务；默认由 `nginx` 使用 `least_conn` 优先把 `/crawl` 转发到更空闲的 Worker，全部忙时仍返回 429
 - **日预算熔断（browser-use）**：按天累计导航/规划阶段的 LLM 调用成本；达到阈值后新 `/crawl` 直接 429，进行中的任务也可能在下一次 LLM 调用前中止并通过 SSE `type=error` 返回（并发下可能略微超额）
   - 默认阈值：50 USD（可用 `BROWSER_USE_DAILY_BUDGET_USD` 调整）
   - 状态存储：`output/browser_use_budget.sqlite`（可用 `BROWSER_USE_BUDGET_DB_PATH` 调整；按 `BROWSER_USE_BUDGET_TZ` 分日，默认 Asia/Shanghai）
@@ -229,7 +229,7 @@ with requests.post(url, json=payload, stream=True) as r:
     - `FEISHU_BUDGET_ALERT_WEBHOOK_URL`：机器人 webhook 地址
     - `FEISHU_BUDGET_ALERT_WEBHOOK_SECRET`：可选，安全密钥（签名）
     - `FEISHU_BUDGET_ALERT_AT_ALL`：可选，是否 @所有人（true/1 开启）
-- **三一正式环境启动通知**：当 `environment=sany_official` 且使用 `gunicorn -c gunicorn.conf.py app:app` 启动时，Gunicorn master 会向固定飞书群发送一次“启动通知”（webhook 写死在代码中）
+- **三一正式环境启动通知**：当 `environment=sany_official` 时，统一由 `deploy/entrypoint.sh` 在容器启动阶段发送一次“启动通知”（webhook 写死在代码中）；与 `SERVER_MODE` 无关
 - **结束判断**：收到 `type=done` 或 `type=error` 即结束；若未收到就断开则视为失败/取消
 - **超时**：默认 1200s，超时后发送 `type=error` 并断开
 - **心跳**：30s 无任何输出才发送，用于保持连接

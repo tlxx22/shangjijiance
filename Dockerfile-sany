@@ -12,13 +12,13 @@ COPY . /app/
 
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
     sed -i 's#mirrors.ustc.edu.cn#mirrors.cloud.aliyuncs.com#g' /etc/apt/sources.list.d/debian.sources && \
-    # 安装 Python 依赖
-    uv sync && \
-    # 修复目录名问题（chrome-linux64 -> chrome-linux）
-    sh -c 'for d in /root/.cache/ms-playwright/chromium-*/; do ln -sf "${d}chrome-linux64" "${d}chrome-linux" 2>/dev/null; done'
+    apt-get update && \
+    apt-get install -y --no-install-recommends nginx supervisor && \
+    rm -rf /var/lib/apt/lists/* && \
+    uv sync
     # 使用 browser-use 包原生模型列表，不再在构建阶段 patch
     # sed -i "s/valid_models = \['bu-latest', 'bu-1-0'\]/valid_models = ['bu-latest', 'bu-1-0', 'bu-2-0', 'bu-30b-a3b-preview']/g" \
     #   .venv/lib/python3.11/site-packages/browser_use/llm/browser_use/chat.py
 
 # 启动命令
-CMD [".venv/bin/gunicorn", "-c", "gunicorn.conf.py", "app:app"]
+CMD ["sh", "/app/deploy/entrypoint.sh"]
