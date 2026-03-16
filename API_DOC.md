@@ -220,7 +220,7 @@ with requests.post(url, json=payload, stream=True) as r:
 
 ## 备注
 
-- **并发控制**：每个内部 Worker 同时只处理一个爬取任务；默认由 `nginx` 使用 `least_conn` 优先把 `/crawl` 转发到更空闲的 Worker，全部忙时仍返回 429
+- **并发控制**：每个内部 Worker 同时只处理一个爬取任务；生产环境通常由外层 Nginx/网关将 `/crawl` 分发到不同 uvicorn Worker，全部忙时仍返回 429
 - **日预算熔断（browser-use）**：按天累计导航/规划阶段的 LLM 调用成本；达到阈值后新 `/crawl` 直接 429，进行中的任务也可能在下一次 LLM 调用前中止并通过 SSE `type=error` 返回（并发下可能略微超额）
   - 默认阈值：50 USD（可用 `BROWSER_USE_DAILY_BUDGET_USD` 调整）
   - 状态存储：`output/browser_use_budget.sqlite`（可用 `BROWSER_USE_BUDGET_DB_PATH` 调整；按 `BROWSER_USE_BUDGET_TZ` 分日，默认 Asia/Shanghai）

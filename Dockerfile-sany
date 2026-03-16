@@ -11,10 +11,6 @@ WORKDIR /app
 COPY . /app/
 
 RUN ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
-    sed -i 's#mirrors.ustc.edu.cn#mirrors.cloud.aliyuncs.com#g' /etc/apt/sources.list.d/debian.sources && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends nginx supervisor && \
-    rm -rf /var/lib/apt/lists/* && \
     uv sync
     # 使用 browser-use 包原生模型列表，不再在构建阶段 patch
     # sed -i "s/valid_models = \['bu-latest', 'bu-1-0'\]/valid_models = ['bu-latest', 'bu-1-0', 'bu-2-0', 'bu-30b-a3b-preview']/g" \

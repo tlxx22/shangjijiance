@@ -4,10 +4,10 @@ set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 PROJECT_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 
-SERVER_MODE="${SERVER_MODE:-nginx_uvicorn}"
+SERVER_MODE="${SERVER_MODE:-uvicorn_only}"
 WORKERS="${WORKERS:-5}"
 UVICORN_BASE_PORT="${UVICORN_BASE_PORT:-8001}"
-STARTUP_NOTIFY_BIND="${STARTUP_NOTIFY_BIND:-0.0.0.0:80}"
+STARTUP_NOTIFY_BIND="${STARTUP_NOTIFY_BIND:-}"
 STARTUP_NOTIFY_PID="$$"
 
 export PROJECT_ROOT SERVER_MODE WORKERS UVICORN_BASE_PORT STARTUP_NOTIFY_BIND STARTUP_NOTIFY_PID
@@ -64,15 +64,71 @@ repair_playwright_browser_links() {
     done
 }
 
-generate_nginx_upstream_file() {
-    : > /tmp/nginx_upstream_servers.conf
+require_positive_integer() {
+    name="$1"
+    value="$2"
 
-    i=0
-    while [ "${i}" -lt "${WORKERS}" ]; do
-        port=$((UVICORN_BASE_PORT + i))
-        printf 'server 127.0.0.1:%s;\n' "${port}" >> /tmp/nginx_upstream_servers.conf
-        i=$((i + 1))
-    done
+    case "${value}" in
+        ''|*[!0-9]*)
+            echo "[entrypoint] ${name} must be a positive integer, got: ${value}" >&2
+            exit 1
+            ;;
+    esac
+
+    if [ "${value}" -lt 1 ]; then
+        echo "[entrypoint] ${name} must be >= 1, got: ${value}" >&2
+        exit 1
+    fi
+}
+
+require_valid_port_range() {
+    last_port=$((UVICORN_BASE_PORT + WORKERS - 1))
+    if [ "${UVICORN_BASE_PORT}" -gt 65535 ] || [ "${last_port}" -gt 65535 ]; then
+        echo "[entrypoint] UVICORN_BASE_PORT + WORKERS - 1 must be <= 65535, got: ${last_port}" >&2
+        exit 1
+    fi
+}
+
+resolve_server_mode() {
+    case "${SERVER_MODE}" in
+        uvicorn_only|legacy_gunicorn)
+            ;;
+        nginx_uvicorn)
+            echo "[entrypoint] SERVER_MODE=nginx_uvicorn is deprecated, using uvicorn_only" >&2
+            SERVER_MODE="uvicorn_only"
+            ;;
+        *)
+            echo "Unsupported SERVER_MODE: ${SERVER_MODE}" >&2
+            exit 1
+            ;;
+    esac
+
+    export SERVER_MODE
+}
+
+default_startup_notify_bind() {
+    case "${SERVER_MODE}" in
+        uvicorn_only)
+            last_port=$((UVICORN_BASE_PORT + WORKERS - 1))
+            if [ "${WORKERS}" -eq 1 ]; then
+                printf '127.0.0.1:%s\n' "${UVICORN_BASE_PORT}"
+            else
+                printf '127.0.0.1:%s~127.0.0.1:%s\n' "${UVICORN_BASE_PORT}" "${last_port}"
+            fi
+            ;;
+        legacy_gunicorn)
+            printf '0.0.0.0:80\n'
+            ;;
+    esac
+}
+
+set_startup_notify_bind() {
+    if [ -n "${STARTUP_NOTIFY_BIND}" ]; then
+        return
+    fi
+
+    STARTUP_NOTIFY_BIND="$(default_startup_notify_bind)"
+    export STARTUP_NOTIFY_BIND
 }
 
 send_startup_notify_once() {
@@ -107,35 +163,28 @@ run_legacy_gunicorn() {
     exec "${GUNICORN_BIN}" -c "${PROJECT_ROOT}/gunicorn.conf.py" app:app
 }
 
-run_nginx_uvicorn() {
-    if ! command -v nginx >/dev/null 2>&1; then
-        echo "[entrypoint] nginx not found, fallback to legacy_gunicorn" >&2
-        run_legacy_gunicorn
-    fi
-
-    if ! command -v supervisord >/dev/null 2>&1; then
-        echo "[entrypoint] supervisord not found, fallback to legacy_gunicorn" >&2
-        run_legacy_gunicorn
-    fi
-
-    generate_nginx_upstream_file
+run_uvicorn_only() {
+    PYTHON_BIN="$(resolve_python_bin)"
     cd "${PROJECT_ROOT}"
-    exec supervisord -n -c "${PROJECT_ROOT}/deploy/supervisord.conf"
+    exec "${PYTHON_BIN}" "${PROJECT_ROOT}/deploy/run_multi_uvicorn.py"
 }
 
 cd "${PROJECT_ROOT}"
+resolve_server_mode
+require_positive_integer "WORKERS" "${WORKERS}"
+if [ "${SERVER_MODE}" = "uvicorn_only" ]; then
+    require_positive_integer "UVICORN_BASE_PORT" "${UVICORN_BASE_PORT}"
+    require_valid_port_range
+fi
+set_startup_notify_bind
 repair_playwright_browser_links
 send_startup_notify_once
 
 case "${SERVER_MODE}" in
-    nginx_uvicorn)
-        run_nginx_uvicorn
+    uvicorn_only)
+        run_uvicorn_only
         ;;
     legacy_gunicorn)
         run_legacy_gunicorn
-        ;;
-    *)
-        echo "Unsupported SERVER_MODE: ${SERVER_MODE}" >&2
-        exit 1
         ;;
 esac

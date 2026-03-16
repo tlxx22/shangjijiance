@@ -5,7 +5,7 @@
 ## 功能特点
 
 - ✅ **SSE 流式 API**：HTTP 服务实时返回爬取进度和结果
-- ✅ **多 Worker 并发**：默认通过 `nginx + 多 uvicorn` 优先把 `/crawl` 路由到更空闲的 worker
+- ✅ **多 Worker 并发**：生产环境可由外层 `Nginx/网关 + 多 uvicorn` 将 `/crawl` 转发到不同 worker
 - ✅ **AI 智能筛选**：使用 LLM 理解页面内容，无需编写 CSS 选择器
 - ✅ **自动登录**：智能检测并自动处理登录流程
 - ✅ **动态日期范围**：API 传入 date_start/date_end，支持任意时间范围
@@ -41,7 +41,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 
 1. 提交代码到对应分支（dev/test/pre/prod）
 2. Jenkins 流水线自动触发
-3. 运行 `deploy/entrypoint.sh` 启动服务（默认 `SERVER_MODE=nginx_uvicorn`）
+3. 运行 `deploy/entrypoint.sh` 启动服务（默认 `SERVER_MODE=uvicorn_only`）
 4. 部署到对应环境
 
 ## API 使用
@@ -92,7 +92,7 @@ curl -X POST http://localhost:8000/crawl \
 | BROWSER_USE_API_KEY | browser-use API 密钥（必填） |
 | BROWSER_USER_AGENT | 可选：统一覆盖浏览器 UA（对 headless/headful 都生效） |
 | BROWSER_USE_DAILY_BUDGET_USD | 可选：browser-use 日预算上限，默认 `50` |
-| SERVER_MODE | 可选：`nginx_uvicorn` / `legacy_gunicorn`，默认 `nginx_uvicorn` |
+| SERVER_MODE | 可选：`uvicorn_only` / `legacy_gunicorn`（兼容 `nginx_uvicorn` 别名），默认 `uvicorn_only` |
 
 ### prompts/ 目录
 
@@ -106,9 +106,10 @@ curl -X POST http://localhost:8000/crawl \
 ### 部署启动
 
 - 生产环境统一通过 `deploy/entrypoint.sh` 启动
-- 默认 `SERVER_MODE=nginx_uvicorn`：`nginx(:80) -> 多个 uvicorn worker`
+- 默认 `SERVER_MODE=uvicorn_only`：容器内启动多个 `uvicorn`，由外层 Nginx/网关转发到 `127.0.0.1:8001~800N`
 - 回滚时可切到 `SERVER_MODE=legacy_gunicorn`
-- `WORKERS` 仍控制内部 worker 数量，默认 `5`
+- `nginx_uvicorn` 仅保留为兼容别名，行为等同 `uvicorn_only`
+- `WORKERS` 仍控制内部 uvicorn 进程数量，默认 `5`
 
 ## 输出结构
 
@@ -131,7 +132,7 @@ output/
 ## 常见问题
 
 **Q: 可以同时处理多个网站吗？**
-A: 支持并发。每个内部 Worker 同时处理一个请求；默认由 `nginx` 优先转发到更空闲的 Worker。
+A: 支持并发。每个内部 Worker 同时处理一个请求；生产环境通常由外层 Nginx/网关把请求分发到不同 uvicorn Worker。
 
 **Q: 如何添加新的分类？**
 A: 在 `prompts/` 目录创建 `分类名.txt` 文件，API 请求时 `category` 填写文件名（不含扩展名）。
@@ -141,8 +142,8 @@ A: 设置环境变量 `WORKERS=10`。
 
 ## 技术栈
 
-- **FastAPI** + **Gunicorn**：HTTP API 服务
-- **Nginx** + **Uvicorn / Gunicorn**：生产部署与回滚启动链路
+- **FastAPI** + **Gunicorn / Uvicorn**：HTTP API 服务与启动链路
+- **外层 Nginx / 网关**：生产环境请求分发
 - **browser-use**：AI 浏览器自动化
 - **Loguru**：日志系统
 - **SSE**：Server-Sent Events 实时流
