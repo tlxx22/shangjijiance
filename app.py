@@ -7,6 +7,7 @@ SSE HTTP API 服务主入口
 """
 import asyncio
 import json
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -21,6 +22,9 @@ if sys.platform == 'win32':
 # 加载 .env 文件（BROWSER_USE_API_KEY 等）
 from dotenv import load_dotenv
 load_dotenv()
+
+os.environ.setdefault("TIMEOUT_BrowserStartEvent", "60")
+os.environ.setdefault("TIMEOUT_BrowserLaunchEvent", "60")
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request

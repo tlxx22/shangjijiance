@@ -1,13 +1,16 @@
 #!/bin/sh
 set -eu
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+PROJECT_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
+
 SERVER_MODE="${SERVER_MODE:-nginx_uvicorn}"
 WORKERS="${WORKERS:-5}"
 UVICORN_BASE_PORT="${UVICORN_BASE_PORT:-8001}"
 STARTUP_NOTIFY_BIND="${STARTUP_NOTIFY_BIND:-0.0.0.0:80}"
 STARTUP_NOTIFY_PID="$$"
 
-export SERVER_MODE WORKERS UVICORN_BASE_PORT STARTUP_NOTIFY_BIND STARTUP_NOTIFY_PID
+export PROJECT_ROOT SERVER_MODE WORKERS UVICORN_BASE_PORT STARTUP_NOTIFY_BIND STARTUP_NOTIFY_PID
 
 resolve_python_bin() {
     if [ -n "${UV_PROJECT_ENVIRONMENT:-}" ] && [ -x "${UV_PROJECT_ENVIRONMENT}/bin/python" ]; then
@@ -20,8 +23,8 @@ resolve_python_bin() {
         return
     fi
 
-    if [ -x "/app/.venv/bin/python" ]; then
-        printf '%s\n' "/app/.venv/bin/python"
+    if [ -x "${PROJECT_ROOT}/.venv/bin/python" ]; then
+        printf '%s\n' "${PROJECT_ROOT}/.venv/bin/python"
         return
     fi
 
@@ -39,8 +42,8 @@ resolve_gunicorn_bin() {
         return
     fi
 
-    if [ -x "/app/.venv/bin/gunicorn" ]; then
-        printf '%s\n' "/app/.venv/bin/gunicorn"
+    if [ -x "${PROJECT_ROOT}/.venv/bin/gunicorn" ]; then
+        printf '%s\n' "${PROJECT_ROOT}/.venv/bin/gunicorn"
         return
     fi
 
@@ -73,8 +76,13 @@ generate_nginx_upstream_file() {
 }
 
 send_startup_notify_once() {
-    PYTHON_BIN="$(resolve_python_bin)"
-    "${PYTHON_BIN}" - <<'PY'
+    PYTHON_BIN="$(resolve_python_bin 2>/dev/null || true)"
+    if [ -z "${PYTHON_BIN:-}" ]; then
+        echo "[entrypoint] startup notify skipped: python not found" >&2
+        return 0
+    fi
+
+    if ! "${PYTHON_BIN}" - <<'PY'
 import os
 from src.official_startup_notify import notify_startup_async
 
@@ -88,20 +96,43 @@ notify_startup_async(
     async_send=False,
 )
 PY
+    then
+        echo "[entrypoint] startup notify skipped: hook execution failed" >&2
+    fi
 }
 
-cd /app
+run_legacy_gunicorn() {
+    GUNICORN_BIN="$(resolve_gunicorn_bin)"
+    cd "${PROJECT_ROOT}"
+    exec "${GUNICORN_BIN}" -c "${PROJECT_ROOT}/gunicorn.conf.py" app:app
+}
+
+run_nginx_uvicorn() {
+    if ! command -v nginx >/dev/null 2>&1; then
+        echo "[entrypoint] nginx not found, fallback to legacy_gunicorn" >&2
+        run_legacy_gunicorn
+    fi
+
+    if ! command -v supervisord >/dev/null 2>&1; then
+        echo "[entrypoint] supervisord not found, fallback to legacy_gunicorn" >&2
+        run_legacy_gunicorn
+    fi
+
+    generate_nginx_upstream_file
+    cd "${PROJECT_ROOT}"
+    exec supervisord -n -c "${PROJECT_ROOT}/deploy/supervisord.conf"
+}
+
+cd "${PROJECT_ROOT}"
 repair_playwright_browser_links
 send_startup_notify_once
 
 case "${SERVER_MODE}" in
     nginx_uvicorn)
-        generate_nginx_upstream_file
-        exec supervisord -n -c /app/deploy/supervisord.conf
+        run_nginx_uvicorn
         ;;
     legacy_gunicorn)
-        GUNICORN_BIN="$(resolve_gunicorn_bin)"
-        exec "${GUNICORN_BIN}" -c /app/gunicorn.conf.py app:app
+        run_legacy_gunicorn
         ;;
     *)
         echo "Unsupported SERVER_MODE: ${SERVER_MODE}" >&2
