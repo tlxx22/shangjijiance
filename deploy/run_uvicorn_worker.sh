@@ -32,6 +32,8 @@ PYTHON_BIN="$(resolve_python_bin)"
 
 cd "${PROJECT_ROOT}"
 export PYTHONUNBUFFERED=1
+export UVICORN_WORKER_INDEX="${PROCESS_NUM}"
+export UVICORN_WORKER_PORT="${PORT}"
 
 exec "${PYTHON_BIN}" -m uvicorn app:app \
     --host "${UVICORN_HOST}" \

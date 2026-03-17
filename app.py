@@ -50,6 +50,12 @@ from src.browser_use_budget import get_budget
 logger = get_logger()
 
 
+def _current_worker_label() -> str:
+    worker_index = os.getenv("UVICORN_WORKER_INDEX") or "unknown"
+    worker_port = os.getenv("UVICORN_WORKER_PORT") or "unknown"
+    return f"worker#{worker_index}(pid={os.getpid()}, port={worker_port})"
+
+
 # ===== FastAPI Lifespan =====
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -123,6 +129,11 @@ async def crawl(request: CrawlRequest, http_request: Request):
     - error: 出错
     """
     # 1. 先检查 category（无效请求不占 worker）
+    request_id = uuid.uuid4().hex[:8]
+    worker_label = _current_worker_label()
+    client_host = http_request.client.host if http_request.client else "-"
+    logger.info(f"[{request_id}] /crawl routed to {worker_label}, client={client_host}, site={request.site.name}")
+
     try:
         template = load_prompt_template(request.category)
     except ValueError as e:
@@ -136,12 +147,15 @@ async def crawl(request: CrawlRequest, http_request: Request):
      
     # 2. 非阻塞拿锁
     if crawl_lock.locked():
+        logger.warning(
+            f"[{request_id}] /crawl rejected by {worker_label}: Worker busy, client={client_host}, site={request.site.name}"
+        )
         raise HTTPException(429, "Worker busy")
     await crawl_lock.acquire()
+    logger.info(f"[{request_id}] /crawl accepted by {worker_label}, client={client_host}, site={request.site.name}")
     
     # 3. 只准备 session，不启动爬虫
     try:
-        request_id = uuid.uuid4().hex[:8]
         
         # 构建 SiteConfig
         site_config = SiteConfig(
