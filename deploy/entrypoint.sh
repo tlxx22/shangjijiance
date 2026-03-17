@@ -7,10 +7,11 @@ PROJECT_ROOT="$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)"
 SERVER_MODE="${SERVER_MODE:-uvicorn_only}"
 WORKERS="${WORKERS:-5}"
 UVICORN_BASE_PORT="${UVICORN_BASE_PORT:-8001}"
+UVICORN_HOST="${UVICORN_HOST:-0.0.0.0}"
 STARTUP_NOTIFY_BIND="${STARTUP_NOTIFY_BIND:-}"
 STARTUP_NOTIFY_PID="$$"
 
-export PROJECT_ROOT SERVER_MODE WORKERS UVICORN_BASE_PORT STARTUP_NOTIFY_BIND STARTUP_NOTIFY_PID
+export PROJECT_ROOT SERVER_MODE WORKERS UVICORN_BASE_PORT UVICORN_HOST STARTUP_NOTIFY_BIND STARTUP_NOTIFY_PID
 
 resolve_python_bin() {
     if [ -n "${UV_PROJECT_ENVIRONMENT:-}" ] && [ -x "${UV_PROJECT_ENVIRONMENT}/bin/python" ]; then
@@ -111,9 +112,9 @@ default_startup_notify_bind() {
         uvicorn_only)
             last_port=$((UVICORN_BASE_PORT + WORKERS - 1))
             if [ "${WORKERS}" -eq 1 ]; then
-                printf '127.0.0.1:%s\n' "${UVICORN_BASE_PORT}"
+                printf '%s:%s\n' "${UVICORN_HOST}" "${UVICORN_BASE_PORT}"
             else
-                printf '127.0.0.1:%s~127.0.0.1:%s\n' "${UVICORN_BASE_PORT}" "${last_port}"
+                printf '%s:%s~%s:%s\n' "${UVICORN_HOST}" "${UVICORN_BASE_PORT}" "${UVICORN_HOST}" "${last_port}"
             fi
             ;;
         legacy_gunicorn)

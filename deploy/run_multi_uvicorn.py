@@ -30,6 +30,7 @@ class UvicornManager:
 		self.project_root = Path(os.getenv("PROJECT_ROOT", Path(__file__).resolve().parents[1])).resolve()
 		self.workers = _parse_positive_int("WORKERS", "5")
 		self.base_port = _parse_positive_int("UVICORN_BASE_PORT", "8001")
+		self.host = (os.getenv("UVICORN_HOST") or "0.0.0.0").strip() or "0.0.0.0"
 		self.last_port = self.base_port + self.workers - 1
 		if self.last_port > 65535:
 			raise SystemExit(
@@ -85,7 +86,7 @@ class UvicornManager:
 
 	def _spawn_workers(self) -> None:
 		print(
-			f"[uvicorn-manager] starting {self.workers} uvicorn workers on 127.0.0.1:{self.base_port}~127.0.0.1:{self.last_port}",
+			f"[uvicorn-manager] starting {self.workers} uvicorn workers on {self.host}:{self.base_port}~{self.host}:{self.last_port}",
 			file=sys.stderr,
 			flush=True,
 		)
