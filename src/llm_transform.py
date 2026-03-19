@@ -14,6 +14,7 @@ from .field_schemas import (
 	supplement_lot_products_from_candidates,
 	try_normalize_announcement_type,
 )
+from .product_category_postprocessor import fill_product_categories_after_lots
 
 
 def _strip_code_fences(text: str) -> str:
@@ -212,6 +213,11 @@ async def normalize_source_json_to_item(
 
 	raw_announcement_type = (meta_fields or {}).get("announcementType")
 	item = _normalize_item_to_crawler_schema(merged)
+	item["lotProducts"] = await fill_product_categories_after_lots(
+		item.get("lotProducts"),
+		site_name="normalize_item",
+		product_category_table=product_category_table,
+	)
 
 	# 公告类别（13 选 1）强校验：
 	# - 不再“无法映射就兜底成招标”

@@ -494,6 +494,7 @@ from .field_schemas import (
 )
 from .estimated_amount_deriver import fill_estimated_amount_after_lots
 from .announcement_type_repair import repair_announcement_type
+from .product_category_postprocessor import fill_product_categories_after_lots
 
 
 # 全局缓存字段配置和提示词（避免每次调用都读取文件）
@@ -2550,6 +2551,11 @@ def create_save_detail_tools(
 			if not isinstance(lot_candidates, list):
 				lot_candidates = []
 			lot_products = supplement_lot_products_from_candidates(lot_products, lot_candidates)
+			lot_products = await fill_product_categories_after_lots(
+				lot_products,
+				site_name=site_name,
+				product_category_table=_product_category_table,
+			)
 
 			# 7. 生成唯一文件名（使用列表页日期做文件分组）
 			filename = get_unique_filename(output_dir, title, file_date)

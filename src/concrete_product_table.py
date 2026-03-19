@@ -68,13 +68,9 @@ def _parse_table(raw: str) -> list[list[str]]:
             continue
 
         parts = [p.strip() for p in re.split(r"[、,，]+", line) if p.strip()]
-        flat_parts: list[str] = []
-        for part in parts:
-            flat_parts.extend([x.strip() for x in re.split(r"\s*/\s*", part) if x.strip()])
-
         seen: set[str] = set()
         row: list[str] = []
-        for part in flat_parts:
+        for part in parts:
             if part not in seen:
                 seen.add(part)
                 row.append(part)
@@ -103,21 +99,37 @@ CONCRETE_PRODUCT_TERMS_SET: set[str] = set(CONCRETE_PRODUCT_TERMS)
 CONCRETE_PRODUCT_TERMS_BY_LENGTH: list[str] = sorted(CONCRETE_PRODUCT_TERMS, key=len, reverse=True)
 
 
+def get_effective_concrete_product_table(raw_table: str | None = None) -> list[list[str]]:
+    table = CONCRETE_PRODUCT_TABLE
+    if raw_table is None:
+        return table
+
+    text = str(raw_table).strip()
+    if not text:
+        return table
+
+    try:
+        parsed = _parse_table(text)
+    except Exception:
+        return table
+    return parsed or table
+
+
+def get_effective_concrete_product_terms(raw_table: str | None = None) -> list[str]:
+    return _build_term_list(get_effective_concrete_product_table(raw_table))
+
+
+def get_effective_concrete_product_terms_set(raw_table: str | None = None) -> set[str]:
+    return set(get_effective_concrete_product_terms(raw_table))
+
+
 def format_concrete_product_table_for_prompt(raw_table: str | None = None) -> str:
     """
     Format the concrete product table for prompt injection.
 
     All terms in the same row are peer candidates. Line breaks are only for readability.
     """
-    table = CONCRETE_PRODUCT_TABLE
-    if raw_table is not None:
-        text = str(raw_table).strip()
-        if text:
-            try:
-                parsed = _parse_table(text)
-                table = parsed or CONCRETE_PRODUCT_TABLE
-            except Exception:
-                table = CONCRETE_PRODUCT_TABLE
+    table = get_effective_concrete_product_table(raw_table)
 
     lines: list[str] = []
     for row in table:
