@@ -15,10 +15,10 @@ from .logger_config import get_logger
 
 logger = get_logger()
 
-_PRODUCT_CATEGORY_MAX_RETRIES = 5
+_PRODUCT_CATEGORY_MAX_RETRIES = 1
 _PRODUCT_CATEGORY_LLM_SEMAPHORE = asyncio.Semaphore(4)
 _PRODUCT_CATEGORY_MULTI_VALUE_RE = re.compile(r"[\u3001,\uff0c;\uff1b\n\r]|(?:\s/\s)")
-_PRODUCT_CATEGORY_MULTI_VALUE_SPLIT_RE = re.compile(r"[\u3001,\uff0c;\uff1b\n\r]+")
+_PRODUCT_CATEGORY_MULTI_VALUE_SPLIT_RE = re.compile(r"(?:\s/\s)|[\u3001,\uff0c;\uff1b\n\r]+")
 
 _PRODUCT_CATEGORY_SYSTEM_PROMPT = """
 You are a strict concrete product classifier for Chinese procurement items.
@@ -68,6 +68,14 @@ def _extract_candidates_from_previous_multi_value(
 		seen.add(text)
 		candidates.append(text)
 	return candidates
+
+
+def _pick_first_value_from_multi_value_output(value: str) -> str:
+	for part in _PRODUCT_CATEGORY_MULTI_VALUE_SPLIT_RE.split((value or "").strip()):
+		text = part.strip().strip("'\"")
+		if text:
+			return text
+	return (value or "").strip()
 
 
 def validate_product_category_output(
@@ -195,6 +203,15 @@ async def fill_product_categories_after_lots(
 				break
 
 		new_row = dict(row)
+		if last_reason == "multi_value":
+			fallback_value = _pick_first_value_from_multi_value_output(last_value)
+			logger.info(
+				f"[{site_name}] lotProducts[{index}] productCategory max-retries fallback "
+				f"subjects={_truncate_for_log(subjects)!r} raw_output={last_value!r} "
+				f"fallback_output={fallback_value!r}"
+			)
+			last_value = fallback_value
+			last_reason = "max_retries_first_value"
 		new_row["productCategory"] = last_value
 		logger.info(
 			f"[{site_name}] lotProducts[{index}] productCategory final "
