@@ -18,6 +18,7 @@ logger = get_logger()
 _PRODUCT_CATEGORY_MAX_RETRIES = 5
 _PRODUCT_CATEGORY_LLM_SEMAPHORE = asyncio.Semaphore(4)
 _PRODUCT_CATEGORY_MULTI_VALUE_RE = re.compile(r"[\u3001,\uff0c;\uff1b\n\r]|(?:\s/\s)")
+_PRODUCT_CATEGORY_MULTI_VALUE_SPLIT_RE = re.compile(r"[\u3001,\uff0c;\uff1b\n\r]+")
 
 _PRODUCT_CATEGORY_SYSTEM_PROMPT = """
 You are a strict concrete product classifier for Chinese procurement items.
@@ -29,7 +30,9 @@ Task:
 Hard rules:
 - Use ONLY `subjects`. Do NOT use models, title, body, lotName, lotNumber, or any other field.
 - The final answer must be EXACTLY one candidate term from the candidate table.
-- If `subjects` does not support a unique exact candidate, output an empty string.
+- If no candidate is meaningfully supported by `subjects`, output an empty string.
+- If several candidates seem related or similar, you MUST still choose the single most suitable / closest / best-matching candidate.
+- Do NOT return an empty string just because several candidates look plausible.
 - Never return a whole row, multiple candidates, a punctuation-joined list, or any explanation.
 - All candidates are peer candidates. Line breaks are only for readability and do not imply priority.
 - Return ONLY valid JSON matching schema: {"productCategory": "..."}.
@@ -51,6 +54,22 @@ def _looks_like_multi_value_output(value: str) -> bool:
 	return bool(_PRODUCT_CATEGORY_MULTI_VALUE_RE.search((value or "").strip()))
 
 
+def _extract_candidates_from_previous_multi_value(
+	value: str,
+	*,
+	candidate_terms: set[str],
+) -> list[str]:
+	candidates: list[str] = []
+	seen: set[str] = set()
+	for part in _PRODUCT_CATEGORY_MULTI_VALUE_SPLIT_RE.split((value or "").strip()):
+		text = part.strip().strip("'\"")
+		if not text or text not in candidate_terms or text in seen:
+			continue
+		seen.add(text)
+		candidates.append(text)
+	return candidates
+
+
 def validate_product_category_output(
 	value: str,
 	*,
@@ -70,6 +89,7 @@ async def _generate_product_category_once(
 	*,
 	subjects: str,
 	prompt_table: str,
+	candidate_terms: set[str],
 	attempt: int,
 	previous_value: str,
 	previous_reason: str,
@@ -79,11 +99,32 @@ async def _generate_product_category_once(
 		f"candidate_table:\n{prompt_table}\n"
 	)
 	if attempt > 1:
-		user_prompt += (
-			f"\nPrevious invalid output: {previous_value!r}\n"
-			f"Failure reason: {previous_reason}\n"
-			"Correct the answer. Return exactly one candidate term or an empty string.\n"
-		)
+		if previous_reason == "multi_value":
+			previous_candidates = _extract_candidates_from_previous_multi_value(
+				previous_value,
+				candidate_terms=candidate_terms,
+			)
+			user_prompt += (
+				f"\nPrevious invalid output: {previous_value!r}\n"
+				"Failure reason: multi_value (you returned multiple candidates).\n"
+				"Correct it by choosing exactly ONE most suitable candidate.\n"
+				"Do NOT return multiple candidates.\n"
+				"Do NOT return an empty string just because several candidates look similar.\n"
+				"Compare them and pick the single best match for `subjects`.\n"
+			)
+			if previous_candidates:
+				user_prompt += "Candidates extracted from your previous invalid output:\n"
+				for candidate in previous_candidates:
+					user_prompt += f"- {candidate}\n"
+				user_prompt += (
+					"Your corrected answer should preferably be chosen from the candidates listed above.\n"
+				)
+		else:
+			user_prompt += (
+				f"\nPrevious invalid output: {previous_value!r}\n"
+				f"Failure reason: {previous_reason}\n"
+				"Correct the answer. Return exactly one candidate term or an empty string.\n"
+			)
 
 	async with _PRODUCT_CATEGORY_LLM_SEMAPHORE:
 		result = await ainvoke_structured(
@@ -126,6 +167,7 @@ async def fill_product_categories_after_lots(
 				generated_value = await _generate_product_category_once(
 					subjects=subjects,
 					prompt_table=prompt_table,
+					candidate_terms=candidate_terms,
 					attempt=attempt,
 					previous_value=last_value,
 					previous_reason=last_reason,
