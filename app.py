@@ -10,10 +10,21 @@ import json
 import os
 import sys
 import uuid
+
+import requests
 from pathlib import Path
 from typing import Optional
-from fastapi import Header, Query
-from src.third_rpc import jy_fetch as jy_fetch_logic, browser_billing as browser_billing_logic
+from urllib.parse import urlparse
+
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from starlette.responses import JSONResponse, Response, StreamingResponse
+
+from src.third_rpc import (
+    bidcenter_post,
+    browser_billing as browser_billing_logic,
+    jy_fetch as jy_fetch_logic,
+)
 
 # Windows asyncio 兼容性修复：browser-use 需要 ProactorEventLoop 来启动浏览器进程
 if sys.platform == 'win32':
@@ -25,7 +36,7 @@ load_dotenv()
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from src.api.models import (
     CrawlRequest,
@@ -74,9 +85,6 @@ app = FastAPI(
 )
 
 # 自定义验证错误处理：返回 400 而不是 422
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """将 Pydantic 验证错误从 422 改为 400"""
@@ -226,6 +234,91 @@ async def crawl(request: CrawlRequest, http_request: Request):
 async def browser_billing():
     """浏览器计费"""
     return browser_billing_logic()
+
+async def _form_dict_from_request(request: Request) -> dict:
+    ct = (request.headers.get("content-type") or "").lower()
+    if "application/json" in ct:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise ValueError("JSON body must be an object")
+        out: dict = {}
+        for k, v in payload.items():
+            if isinstance(v, (dict, list)):
+                continue
+            if v is None:
+                out[str(k)] = ""
+            elif isinstance(v, bool):
+                out[str(k)] = "true" if v else "false"
+            else:
+                out[str(k)] = str(v)
+        return out
+
+    form = await request.form()
+    out = {}
+    for k, v in form.multi_items():
+        if isinstance(v, str):
+            out[k] = v
+    return out
+
+
+def _pop_upstream_url(form_data: dict) -> tuple[str, dict]:
+    """
+    从表单中取出上游地址（参数名 upstream_url 或 url），其余字段原样转发给 bidcenter。
+    """
+    data = dict(form_data)
+    raw = data.pop("upstream_url", None) or data.pop("url", None)
+    if raw is None or not str(raw).strip():
+        raise ValueError("upstream_url is required (or use alias: url)")
+    raw = str(raw).strip()
+    p = urlparse(raw)
+    if p.scheme not in ("http", "https"):
+        raise ValueError("upstream_url must be http or https")
+    if not p.netloc:
+        raise ValueError("upstream_url is not a valid URL")
+    return raw, data
+
+
+async def _bidcenter_proxy(request: Request, route_label: str):
+    try:
+        form_data = await _form_dict_from_request(request)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"{route_label} parse body failed: {e}")
+        raise HTTPException(400, "Invalid request body")
+
+    try:
+        upstream_url, payload = _pop_upstream_url(form_data)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    try:
+        upstream = await asyncio.to_thread(bidcenter_post, upstream_url, payload)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"{route_label} upstream error: {e}")
+        raise HTTPException(502, f"Upstream request failed: {e}")
+
+    media = upstream.headers.get("Content-Type") or "application/json; charset=utf-8"
+    return Response(content=upstream.content, status_code=upstream.status_code, media_type=media)
+
+
+@app.post("/bidcenter/search")
+async def bidcenter_search_proxy(request: Request):
+    """
+    代理招中标搜索：POST，除 **upstream_url**（或 **url**）外，其余参数原样转发为上游 form-urlencoded。
+    upstream_url 为完整 HTTPS 接口地址，例如 https://api.bidcenter.com.cn/custom/250549/Search.ashx
+    """
+    return await _bidcenter_proxy(request, "/bidcenter/search")
+
+
+@app.post("/bidcenter/detail")
+async def bidcenter_detail_proxy(request: Request):
+    """
+    代理招中标详情：POST，除 **upstream_url**（或 **url**）外，其余参数原样转发（详情接口需含 id）。
+    upstream_url 示例：https://api.bidcenter.com.cn/custom/250549/Detail.ashx
+    """
+    return await _bidcenter_proxy(request, "/bidcenter/detail")
+
 
 @app.get("/jy_fetch")
 async def jy_fetch(

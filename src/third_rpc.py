@@ -1,7 +1,24 @@
 #三方rpc调用
+import os
 import requests
 import time
 import hashlib
+
+def bidcenter_post(upstream_url: str, form_data: dict, timeout: float = 120.0) -> requests.Response:
+    """
+    bidcenter 类接口通用 POST（上游：application/x-www-form-urlencoded）。
+    upstream_url 由调用方传入，不在此写死。
+    form_data 为扁平键值，与上游文档一致（搜索、详情等）。
+    """
+    return requests.post(
+        upstream_url,
+        data=form_data,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Accept-Charset": "UTF-8",
+        },
+        timeout=timeout,
+    )
 
 def jy_fetch(appid:str = 'jyGy5XQAEEAgRbTUNPKyRU',key_secret:str='I3761u5n',timestamp:str=None,signature:str=None,next_page:str=None):
       """ 剑鱼数据获取 返回json数据"""

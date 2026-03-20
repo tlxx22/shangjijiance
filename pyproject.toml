@@ -23,6 +23,12 @@ dependencies = [
     "loguru>=0.7.0",
 ]
 
+[tool.pyright]
+# 让 Pylance / basedpyright 使用项目 .venv，从而解析 fastapi / starlette 等依赖
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.11"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
