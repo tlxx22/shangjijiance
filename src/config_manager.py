@@ -196,7 +196,8 @@ def generate_extract_prompt(
 		lines.append("- 即使是结果公示/评标结果公示/候选公示类正文，只要正文明确出现“包件/标段 + 设备名/物资名”，也必须同步输出对应的 lotProducts；不要只输出 lotCandidates")
 		lines.append("- 抽取 lotProducts 时，不要求同时具备数量/单位/型号；只要设备名/物资名明确，就应先保留该标的物行，缺失字段留空")
 		lines.append("- lotCandidates：每个元素表示一条“单位行”，包含 type（中标/中标候选人/非中标候选人）+ candidates(string) + candidatePrices(number(元) 或 null)；如有多行，输出多个元素")
-		lines.append("- 若某个 lot 的结果明确写成“另行公告/另行通知/待公告”等占位结论，也必须保留该 lot 的单位行；candidates 直接填写该原文占位词，不要丢掉该 lot")
+		lines.append("- candidates 只允许填写明显的公司/组织名字符串（如有限公司、研究院、中心、学校、医院、厂、院、联合体等明确主体名称）；若原文对应位置不是明确的公司/组织名，而是“另行公告/待公告/另行通知/详见附件/排名第1”等占位词、说明语或其他非主体文本，则 candidates 必须填 \"\"")
+		lines.append("- 若某个 lot 的候选单位名称缺失或 candidates 被判定为应填 \"\"，仍必须保留该 lot 的单位行；只允许将 candidates 置空，lotNumber/type/candidatePrices 等其他字段照常提取，不要丢掉该 lot")
 		lines.append(
 			"- unitPrices/candidatePrices 单位为“元”；如页面为“万/亿”，必须换算成“元”；如果无法解析为单一金额（如范围/多个值/非金额文本），请返回 null（不要编造）"
 		)
