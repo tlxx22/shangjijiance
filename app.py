@@ -46,6 +46,8 @@ from src.api.models import (
     MarkdownResponse,
     NormalizeItemRequest,
     NormalizeItemResponse,
+    ParentOrgNameRequest,
+    ParentOrgNameResponse,
 )
 from src.api.prompt_manager import load_prompt_template, render_prompt
 from src.api.crawl_session import CrawlSession, event_generator
@@ -57,6 +59,7 @@ from src.address_normalizer import extract_admin_divisions_from_details
 from src.custom_tools import compute_data_id, _parse_address_parts_from_detail
 from src.announcement_type_repair import AnnouncementTypeRepairError
 from src.browser_use_budget import get_budget
+from src.parent_org_service import ParentOrgUpstreamError, resolve_parent_org_name
 
 logger = get_logger()
 
@@ -451,6 +454,48 @@ async def normalize_item(http_request: Request):
     except Exception as e:
         logger.error(f"/normalize_item failed: {e}")
         raise HTTPException(502, f"Upstream normalize error: {e}")
+
+
+@app.post("/parent_org_name", response_model=ParentOrgNameResponse)
+async def parent_org_name(http_request: Request):
+    """
+    联网搜索并判断输入公司/组织名称的最接近上级组织。
+    """
+    try:
+        raw = await http_request.body()
+        text_fallback = raw.decode("utf-8", errors="ignore").strip()
+
+        payload: dict
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                payload = {"orgName": text_fallback}
+        except Exception:
+            payload = {"orgName": text_fallback}
+
+        req = ParentOrgNameRequest.model_validate(payload)
+        result = await asyncio.to_thread(resolve_parent_org_name, req.orgName)
+        logger.info(
+            "/parent_org_name resolved "
+            f"orgName={req.orgName!r} route={result['route']} model={result['model']} "
+            f"parentOrgName={result['parentOrgName']!r} confidence={result['confidence']} "
+            f"sources={len(result['sources'])}"
+        )
+        return {
+            "parentOrgName": result["parentOrgName"],
+            "confidence": result["confidence"],
+            "sources": result["sources"],
+        }
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+    except ParentOrgUpstreamError as e:
+        logger.error(f"/parent_org_name failed: {e}")
+        raise HTTPException(502, f"Upstream parent_org_name error: {e}")
+    except Exception as e:
+        logger.error(f"/parent_org_name failed: {e}")
+        raise HTTPException(502, f"Upstream parent_org_name error: {e}")
 
 
 if __name__ == "__main__":

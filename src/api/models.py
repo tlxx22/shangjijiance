@@ -81,3 +81,21 @@ class NormalizeItemRequest(BaseModel):
 class NormalizeItemResponse(BaseModel):
     """任意来源文本/Markdown 映射到统一模板的响应"""
     data: dict = Field(description="统一 item 模板 JSON")
+
+
+class ParentOrgNameRequest(BaseModel):
+    """母公司/上级组织查询请求"""
+    orgName: constr(min_length=1) = Field(description="待查询的公司或组织名称")
+
+
+class ParentOrgSource(BaseModel):
+    """联网搜索来源"""
+    title: str = Field(description="来源标题；若上游未提供则为空字符串")
+    url: str = Field(description="来源链接")
+
+
+class ParentOrgNameResponse(BaseModel):
+    """母公司/上级组织查询响应"""
+    parentOrgName: str = Field(description="模型输出的原始 parentOrgName")
+    confidence: float = Field(ge=0, le=1, description="0~1 之间的置信度")
+    sources: list[ParentOrgSource] = Field(description="联网搜索真实来源")
