@@ -969,9 +969,12 @@ class LotCandidates(RootModel[list[LotCandidate]]):
 		items = _as_list(v)
 		out: list[dict] = []
 		for item in items:
+			raw_lot_number = item.get("lotNumber")
 			lot_name = _join_list(item.get("lotName"))
 			lot_number = _infer_lot_number_from_text(item.get("lotNumber")) or _infer_lot_number_from_text(lot_name) or "标段一"
 			declared_type = _join_list(item.get("type"))
+			lot_number = _infer_lot_number_from_text(raw_lot_number) or lot_number
+			has_structural_fields = bool(_join_list(raw_lot_number)) or bool(lot_name) or bool(declared_type)
 
 			# Backward compatibility: old schema fields (winner/winningAmount) may still appear.
 			winner = _join_list(item.get("winner"))
@@ -981,7 +984,7 @@ class LotCandidates(RootModel[list[LotCandidate]]):
 			candidate_prices = _money_list(item.get("candidatePrices"))
 
 			row_count = max(len(candidates), len(candidate_prices))
-			keep_one = row_count > 0 or bool(winner) or (winning_amount is not None)
+			keep_one = row_count > 0 or bool(winner) or (winning_amount is not None) or has_structural_fields
 			if not keep_one:
 				continue
 
