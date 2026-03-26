@@ -4,6 +4,7 @@ import asyncio
 import re
 from typing import Any
 
+from .algorithm_version import ALGORITHM_VERSION
 from .extract_client import chat_completion
 from .config_manager import load_extract_fields
 from .custom_tools import extract_fields_from_text, normalize_field_value
@@ -64,10 +65,11 @@ _TYPE_DEFAULTS: dict[str, Any] = {
 def _build_full_item_template() -> dict[str, Any]:
 	"""
 	Build a full item template that matches the crawler output structure.
-	Fields come from extract_fields.yaml (all stages) plus announcementUrl/Name/Content and dataId.
+	Fields come from extract_fields.yaml (all stages) plus announcementUrl/Name/Content, dataId, and version.
 	"""
 	out: dict[str, Any] = {
 		"dataId": "",
+		"version": ALGORITHM_VERSION,
 		"announcementUrl": "",
 		"announcementName": "",
 		"announcementContent": "",

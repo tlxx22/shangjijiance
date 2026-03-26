@@ -479,6 +479,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 from browser_use import Agent
 from browser_use.tools.service import Tools
+from .algorithm_version import ALGORITHM_VERSION
 from .config_manager import load_extract_fields, generate_extract_prompt
 from .prompts import GLOBAL_RULES
 from .address_normalizer import extract_admin_divisions_from_details
@@ -695,9 +696,11 @@ def compute_data_id(payload: dict) -> str:
 	说明：
 	- 以 JSON 序列化后的内容为输入（sort_keys=True）计算 SHA256
 	- 会忽略自身字段 `dataId`，避免递归
+	- 会忽略算法版本字段 `version`，避免版本升级导致同一公告的 dataId 变化
 	"""
 	data = dict(payload or {})
 	data.pop("dataId", None)
+	data.pop("version", None)
 	raw = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 	return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -2562,6 +2565,7 @@ def create_save_detail_tools(
 
 			# 组装最终返回结构（V2）
 			result_data = {
+				"version": ALGORITHM_VERSION,
 				"announcementUrl": detail_url,
 				"announcementName": title,
 				"announcementContent": announcement_content,
@@ -2576,9 +2580,10 @@ def create_save_detail_tools(
 				"lotCandidates": lot_candidates,
 			}
 
-			# announcementDate：详情页优先，取不到用列表页兜底
-			if not result_data.get("announcementDate"):
-				result_data["announcementDate"] = normalize_date_ymd(date) or date
+			# announcementDate：优先使用列表页在点击前记录的日期；列表页无有效日期时再保留详情页提取结果
+			list_announcement_date = normalize_date_ymd(date) or ("" if date is None else str(date).strip())
+			if list_announcement_date:
+				result_data["announcementDate"] = list_announcement_date
 
 			# 公告类别（13 选 1）强校验：
 			# - 不再“无法映射就兜底成招标”
