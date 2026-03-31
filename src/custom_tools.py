@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import os
 from pathlib import Path
+import time
 from typing import Any
 import re
 
@@ -14,6 +15,23 @@ from browser_use import BrowserSession, ActionResult
 from .logger_config import get_logger
 
 logger = get_logger()
+
+
+_DETAIL_READY_SELECTORS = (
+	".content_body_box_body",
+	".home_fulltext",
+	".notice-detail-li-con.rich-text",
+	".notice-detail-li-con",
+	".rich-text",
+	".notice-detail-content",
+	".detail-content",
+	".detailCon",
+	".detail-con",
+	".section-row",
+	".contact-table",
+	".template-notice-detail-body",
+	".template-notice-detail-left",
+)
 
 
 _MAX_FILENAME_COMPONENT_BYTES = 240  # conservative across Windows/Linux filesystems
@@ -1970,7 +1988,76 @@ def _html_to_clean_content_html(html: str, site_name: str) -> str:
 	return str(soup)
 
 
-async def extract_page_content(browser_session: BrowserSession, site_name: str) -> str:
+async def _extract_detail_html_by_selectors(
+	cdp_session: Any,
+	*,
+	min_text_len: int = 30,
+) -> dict[str, Any]:
+	"""
+	使用一组已知详情容器 selector 直接抓取 outerHTML。
+
+	当复杂正文提取脚本返回空时，回退到这条更朴素的路径，
+	优先保证“能拿到详情主体 HTML”。
+	"""
+	selectors_json = repr(list(_DETAIL_READY_SELECTORS))
+	result = await cdp_session.cdp_client.send.Runtime.evaluate(
+		params={
+			"expression": f"""
+(() => {{
+  const selectors = {selectors_json};
+  const minTextLen = {min_text_len};
+  const visible = (el) => {{
+    if (!el) return false;
+    const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    if (style) {{
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    }}
+    if (el.closest && el.closest('[hidden], [aria-hidden="true"]')) return false;
+    const rects = typeof el.getClientRects === 'function' ? el.getClientRects() : null;
+    const text = ((el.innerText || el.textContent || '').trim());
+    return (!!rects && rects.length > 0) && text.length >= minTextLen;
+  }};
+
+  let best = null;
+  for (const selector of selectors) {{
+    const nodes = Array.from(document.querySelectorAll(selector));
+    for (const node of nodes) {{
+      const text = ((node.innerText || node.textContent || '').trim());
+      if (!visible(node)) continue;
+      const candidate = {{
+        selector,
+        textLength: text.length,
+        html: node.outerHTML || '',
+        readyState: document.readyState || ''
+      }};
+      if (!best || candidate.textLength > best.textLength) {{
+        best = candidate;
+      }}
+    }}
+  }}
+
+  return best || {{
+    selector: '',
+    textLength: 0,
+    html: '',
+    readyState: document.readyState || '',
+    bodyTextLength: ((document.body && (document.body.innerText || document.body.textContent)) || '').trim().length
+  }};
+}})()
+""",
+			"returnByValue": True,
+		},
+		session_id=cdp_session.session_id,
+	)
+	return (((result or {}).get("result") or {}).get("value") or {}) if isinstance(result, dict) else {}
+
+
+async def extract_page_content(
+	browser_session: BrowserSession,
+	site_name: str,
+	*,
+	cdp_session: Any | None = None,
+) -> str:
 	"""
 	提取当前详情页的“正文容器”HTML（尽量保留表格/结构），不做 Markdown 转换。
 	"""
@@ -1983,7 +2070,8 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
 			state_url = str(getattr(state, "url", "") or "").strip() or None
 
 		stage = "get_or_create_cdp_session"
-		cdp_session = await browser_session.get_or_create_cdp_session()
+		if cdp_session is None:
+			cdp_session = await browser_session.get_or_create_cdp_session()
 		html_result: Any | None = None
 		stage = "runtime_evaluate"
 		try:
@@ -1997,6 +2085,20 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
   const keywords = ['公告内容', '公告标题', '项目编号', '发布时间', '附件列表', '物资信息', '相关公告列表'];
   const body = document.body || document.documentElement;
   if (!body) return '';
+  function isVisible(el) {
+    if (!el) return false;
+    try {
+      const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+      if (style) {
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+      }
+      if (el.closest && el.closest('[hidden], [aria-hidden="true"]')) return false;
+      const rects = typeof el.getClientRects === 'function' ? el.getClientRects() : null;
+      return !!rects && rects.length > 0;
+    } catch (e) {
+      return false;
+    }
+  }
 
   // 0) Iframe-first: pick the iframe whose inner document has the most meaningful text.
   // (Parents' innerText won't include iframe document content, so the normal scorer would miss it.)
@@ -2065,6 +2167,7 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
     } catch (e) { return ''; }
   }
   function score(el) {
+    if (!isVisible(el)) return -1e18;
     const t = textOf(el);
     const len = t.length;
     if (len < 80) return -1e18;
@@ -2098,6 +2201,7 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
   for (const sel of selectorCandidates) {
     const nodes = body.querySelectorAll(sel);
     for (const n of nodes) {
+      if (!isVisible(n)) continue;
       const s = score(n);
       if (s > bestScore) { best = n; bestScore = s; }
     }
@@ -2109,6 +2213,7 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
     // pre-rank by text length to keep it fast
     const ranked = [];
     for (const n of all) {
+      if (!isVisible(n)) continue;
       const t = textOf(n);
       ranked.push([t.length, n]);
     }
@@ -2147,12 +2252,16 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
 
 		stage = "parse_runtime_result"
 		html = ""
+		result_type = ""
+		result_subtype = ""
 		if isinstance(html_result, dict):
 			exception_details = html_result.get("exceptionDetails")
 			if exception_details:
 				logger.debug(f"[{site_name}] Runtime.evaluate exceptionDetails: {exception_details}")
 			r = html_result.get("result")
 			if isinstance(r, dict):
+				result_type = str(r.get("type") or "")
+				result_subtype = str(r.get("subtype") or "")
 				v = r.get("value")
 				if isinstance(v, str):
 					html = v
@@ -2165,11 +2274,53 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
 			logger.debug(f"[{site_name}] Runtime.evaluate returned unexpected type: {type(html_result)}")
 
 		if not html:
-			return ""
+			stage = "selector_fallback"
+			fallback_value: dict[str, Any] = {}
+			with contextlib.suppress(Exception):
+				fallback_value = await _extract_detail_html_by_selectors(cdp_session)
+			fallback_html = str(fallback_value.get("html") or "").strip() if isinstance(fallback_value, dict) else ""
+			if fallback_html:
+				logger.info(
+					f"[{site_name}] 正文提取回退成功: selector={fallback_value.get('selector')} "
+					f"textLength={fallback_value.get('textLength')} readyState={fallback_value.get('readyState')}"
+				)
+				html = fallback_html
+			else:
+				focus_target = getattr(browser_session, "agent_focus_target_id", None)
+				logger.warning(
+					f"[{site_name}] extract_page_content 返回空: "
+					f"result_type={result_type or '<empty>'} "
+					f"result_subtype={result_subtype or '<empty>'} "
+					f"focus_target={str(focus_target or '')[-8:] or '<none>'} "
+					f"state_url={state_url or '<unknown>'} "
+					f"fallback_selector={fallback_value.get('selector') if isinstance(fallback_value, dict) else ''} "
+					f"fallback_textLength={fallback_value.get('textLength') if isinstance(fallback_value, dict) else ''} "
+					f"fallback_readyState={fallback_value.get('readyState') if isinstance(fallback_value, dict) else ''}"
+				)
+				return ""
 
 		stage = "cleanup"
 		try:
-			return _html_to_clean_content_html(html, site_name=site_name).strip()
+			cleaned_html = _html_to_clean_content_html(html, site_name=site_name).strip()
+			if cleaned_html:
+				return cleaned_html
+			logger.warning(
+				f"[{site_name}] HTML cleanup returned empty content, retrying selector fallback: "
+				f"raw_html_length={len(str(html or ''))}"
+			)
+			fallback_value: dict[str, Any] = {}
+			with contextlib.suppress(Exception):
+				fallback_value = await _extract_detail_html_by_selectors(cdp_session)
+			fallback_html = str(fallback_value.get("html") or "").strip() if isinstance(fallback_value, dict) else ""
+			if fallback_html:
+				recovered_html = _html_to_clean_content_html(fallback_html, site_name=site_name).strip()
+				if recovered_html:
+					logger.info(
+						f"[{site_name}] 正文清洗回退成功: selector={fallback_value.get('selector')} "
+						f"textLength={fallback_value.get('textLength')} readyState={fallback_value.get('readyState')}"
+					)
+					return recovered_html
+			return str(html).strip()
 		except Exception as clean_err:
 			logger.warning(
 				f"[{site_name}] HTML cleanup failed, returning raw HTML: {clean_err}"
@@ -2182,6 +2333,93 @@ async def extract_page_content(browser_session: BrowserSession, site_name: str) 
 			+ (f" url={state_url}" if state_url else "")
 		)
 		return ""
+
+
+async def _wait_for_detail_content_ready(
+	browser_session: BrowserSession,
+	site_name: str,
+	*,
+	cdp_session: Any | None = None,
+	timeout_seconds: float = 8.0,
+	poll_seconds: float = 0.5,
+) -> bool:
+	"""
+	显式等待详情页正文容器渲染完成。
+
+	适用于 SPA / 异步渲染页面：在切到详情页后，先等待常见正文容器出现且拥有足够文本，
+	再执行 extract_page_content，降低“内容为空”的概率。
+	"""
+	selectors_json = repr(list(_DETAIL_READY_SELECTORS))
+	deadline = time.monotonic() + max(timeout_seconds, poll_seconds)
+	last_state = "init"
+
+	while time.monotonic() < deadline:
+		try:
+			if cdp_session is None:
+				cdp_session = await browser_session.get_or_create_cdp_session()
+			result = await cdp_session.cdp_client.send.Runtime.evaluate(
+				params={
+					"expression": f"""
+(() => {{
+  const selectors = {selectors_json};
+  const minTextLen = 30;
+  const visible = (el) => {{
+    if (!el) return false;
+    const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    if (style) {{
+      if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    }}
+    if (el.closest && el.closest('[hidden], [aria-hidden="true"]')) return false;
+    const rects = typeof el.getClientRects === 'function' ? el.getClientRects() : null;
+    const text = ((el.innerText || el.textContent || '').trim());
+    return (!!rects && rects.length > 0) && text.length >= minTextLen;
+  }};
+
+  for (const selector of selectors) {{
+    const nodes = Array.from(document.querySelectorAll(selector));
+    for (const node of nodes) {{
+      const text = ((node.innerText || node.textContent || '').trim());
+      if (visible(node)) {{
+        return {{
+          ready: true,
+          selector,
+          textLength: text.length,
+          readyState: document.readyState || ''
+        }};
+      }}
+    }}
+  }}
+
+  return {{
+    ready: false,
+    readyState: document.readyState || '',
+    bodyTextLength: ((document.body && (document.body.innerText || document.body.textContent)) || '').trim().length
+  }};
+}})()
+""",
+					"returnByValue": True,
+				},
+				session_id=cdp_session.session_id,
+			)
+			value = (((result or {}).get("result") or {}).get("value") or {})
+			if isinstance(value, dict):
+				last_state = (
+					f"readyState={value.get('readyState', '')} "
+					f"bodyTextLength={value.get('bodyTextLength', '')}"
+				).strip()
+				if value.get("ready") is True:
+					logger.info(
+						f"[{site_name}] 详情正文显式等待成功: selector={value.get('selector')} "
+						f"textLength={value.get('textLength')} readyState={value.get('readyState')}"
+					)
+					return True
+		except Exception as e:
+			last_state = f"eval_error={e}"
+
+		await asyncio.sleep(poll_seconds)
+
+	logger.warning(f"[{site_name}] 详情正文显式等待超时，继续尝试提取: {last_state}")
+	return False
 
 
 class SaveDetailParams(BaseModel):
@@ -2363,6 +2601,7 @@ def create_save_detail_tools(
 		logger.info(f"[{site_name}] 保存详情页: {title[:40]}...")
 
 		detail_url: str | None = None
+		cdp_session: Any | None = None
 		try:
 			# 1. 确保输出目录存在
 			output_dir.mkdir(parents=True, exist_ok=True)
@@ -2444,11 +2683,15 @@ def create_save_detail_tools(
 
 			# 3. 尝试点击"查看完整信息"按钮（展开脱敏内容）
 			await click_show_full_info(browser_session)
-			# 一些站点详情内容是异步渲染的，点击后需要额外等待
-			await asyncio.sleep(2)
+			# 一些站点详情内容是 SPA 异步渲染的，需显式等待正文容器出现。
+			await _wait_for_detail_content_ready(browser_session, site_name, cdp_session=cdp_session)
 
 			# 4. 提取公告原文（HTML，不做 Markdown 转换）
-			announcement_content = await extract_page_content(browser_session, site_name)
+			announcement_content = await extract_page_content(
+				browser_session,
+				site_name,
+				cdp_session=cdp_session,
+			)
 			if not announcement_content:
 				logger.warning(f"[{site_name}] 提取公告原文(HTML)失败: 内容为空")
 				# 失败也要尽量回到列表页并回收 tab，避免后续 focus/index 混乱
