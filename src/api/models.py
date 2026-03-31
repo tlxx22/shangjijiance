@@ -2,7 +2,10 @@
 Pydantic 请求/响应模型
 """
 from datetime import date
-from pydantic import BaseModel, HttpUrl, Field, constr, model_validator
+from typing import Any
+from urllib.parse import urlparse
+
+from pydantic import BaseModel, HttpUrl, Field, constr, field_validator, model_validator
 
 
 class SiteInfo(BaseModel):
@@ -100,3 +103,52 @@ class ParentOrgNameResponse(BaseModel):
     parentOrgName: str = Field(description="模型输出的原始 parentOrgName")
     confidence: float = Field(ge=0, le=1, description="0~1 之间的置信度")
     sources: list[ParentOrgSource] = Field(description="联网搜索真实来源")
+
+
+class HttpProxyBase(BaseModel):
+    """通用 HTTP 代理：目标地址、请求头、query、超时均由调用方传入"""
+
+    url: str = Field(..., description="完整 HTTP/HTTPS URL")
+    headers: dict[str, str] = Field(default_factory=dict, description="转发到上游的请求头")
+    params: dict[str, str] | None = Field(
+        default=None,
+        description="追加到 URL 的 query 参数（与 url 中已有 query 合并，由 requests 处理）",
+    )
+    timeout: float = Field(default=120.0, ge=1.0, le=600.0, description="上游请求超时（秒）")
+
+    @field_validator("url")
+    @classmethod
+    def url_must_http(cls, v: str) -> str:
+        raw = v.strip()
+        p = urlparse(raw)
+        if p.scheme not in ("http", "https"):
+            raise ValueError("url must be http or https")
+        if not p.netloc:
+            raise ValueError("url is not a valid URL")
+        return raw
+
+
+class HttpProxyGetRequest(HttpProxyBase):
+    """代理 GET：本服务使用 POST + JSON 承载参数，避免 query 过长与请求头无法表达的问题"""
+
+
+class HttpProxyPostRequest(HttpProxyBase):
+    """代理 POST：body 四选一——json_body / data（表单）/ body（原始字符串）；均为空则发无 body 的 POST"""
+
+    json_body: Any | None = Field(default=None, description="JSON body，对应 requests 的 json=…")
+    data: dict[str, Any] | None = Field(
+        default=None,
+        description="表单字段，对应 requests 的 data=…（application/x-www-form-urlencoded）",
+    )
+    body: str | None = Field(default=None, description="原始 body 字符串（UTF-8 编码发出）")
+    body_content_type: str | None = Field(
+        default=None,
+        description="与 body 同时使用时设置 Content-Type；未设置时由上游库默认",
+    )
+
+    @model_validator(mode="after")
+    def one_body_mode(self):
+        modes = [self.json_body is not None, self.data is not None, self.body is not None]
+        if sum(modes) > 1:
+            raise ValueError("json_body、data、body 最多只能指定一种")
+        return self

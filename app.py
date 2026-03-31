@@ -42,6 +42,8 @@ from src.api.models import (
     CrawlRequest,
     EmbeddingRequest,
     EmbeddingResponse,
+    HttpProxyGetRequest,
+    HttpProxyPostRequest,
     MarkdownRequest,
     MarkdownResponse,
     NormalizeItemRequest,
@@ -316,6 +318,94 @@ async def _bidcenter_proxy(request: Request, route_label: str):
             },
         )
     return JSONResponse(content=data, status_code=upstream.status_code)
+
+
+def _proxy_response_dict(r: requests.Response) -> dict:
+    out: dict = {
+        "status_code": r.status_code,
+        "headers": dict(r.headers),
+        "text": r.text,
+    }
+    try:
+        out["json"] = r.json()
+    except ValueError:
+        pass
+    return out
+
+
+def _sync_http_proxy_get(req: HttpProxyGetRequest) -> dict:
+    return _proxy_response_dict(
+        requests.get(
+            req.url,
+            headers=req.headers or None,
+            params=req.params,
+            timeout=req.timeout,
+        )
+    )
+
+
+def _sync_http_proxy_post(req: HttpProxyPostRequest) -> dict:
+    base_kw = {
+        "url": req.url,
+        "params": req.params,
+        "timeout": req.timeout,
+    }
+    headers = dict(req.headers) if req.headers else {}
+    if req.json_body is not None:
+        resp = requests.post(
+            **base_kw,
+            json=req.json_body,
+            headers=headers or None,
+        )
+    elif req.data is not None:
+        resp = requests.post(
+            **base_kw,
+            data=req.data,
+            headers=headers or None,
+        )
+    elif req.body is not None:
+        if req.body_content_type:
+            headers["Content-Type"] = req.body_content_type
+        resp = requests.post(
+            **base_kw,
+            data=req.body.encode("utf-8"),
+            headers=headers or None,
+        )
+    else:
+        resp = requests.post(
+            **base_kw,
+            headers=headers or None,
+        )
+    return _proxy_response_dict(resp)
+
+
+@app.post("/proxy/get")
+async def http_proxy_get(req: HttpProxyGetRequest):
+    """
+    代理上游 **GET**：目标 `url`、`headers`、`params`（query）、`timeout` 均来自 JSON body。
+    （本接口为 POST，以便携带完整 URL 与请求头。）
+    响应为 JSON：`status_code`、`headers`、`text`，若上游 body 可解析为 JSON 则另有 `json` 字段。
+    """
+    try:
+        payload = await asyncio.to_thread(_sync_http_proxy_get, req)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"/proxy/get upstream error: {e}")
+        raise HTTPException(502, f"Upstream request failed: {e}")
+    return JSONResponse(content=payload)
+
+
+@app.post("/proxy/post")
+async def http_proxy_post(req: HttpProxyPostRequest):
+    """
+    代理上游 **POST**：`url`、`headers`、`params`、`timeout` 同上；正文四选一：`json_body`、`data`（表单）、`body`（原始字符串）+ 可选 `body_content_type`；皆不填则为无 body 的 POST。
+    响应格式同 `/proxy/get`。
+    """
+    try:
+        payload = await asyncio.to_thread(_sync_http_proxy_post, req)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"/proxy/post upstream error: {e}")
+        raise HTTPException(502, f"Upstream request failed: {e}")
+    return JSONResponse(content=payload)
 
 
 @app.post("/bidcenter/search")
