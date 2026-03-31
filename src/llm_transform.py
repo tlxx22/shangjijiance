@@ -5,17 +5,10 @@ import re
 from typing import Any
 
 from .algorithm_version import ALGORITHM_VERSION
-from .extract_client import chat_completion
 from .config_manager import load_extract_fields
 from .custom_tools import extract_fields_from_text, normalize_field_value
-from .announcement_type_repair import AnnouncementTypeRepairError, repair_announcement_type
-from .estimated_amount_deriver import fill_estimated_amount_after_lots
-from .field_schemas import (
-	ANNOUNCEMENT_TYPES,
-	supplement_lot_products_from_candidates,
-	try_normalize_announcement_type,
-)
-from .product_category_postprocessor import fill_product_categories_after_lots
+from .extract_client import chat_completion
+from .field_schemas import supplement_lot_products_from_candidates, try_normalize_announcement_type
 
 
 def _strip_code_fences(text: str) -> str:
@@ -24,11 +17,9 @@ def _strip_code_fences(text: str) -> str:
 	"""
 	s = (text or "").strip()
 	if s.startswith("```"):
-		# remove first fence line
 		lines = s.splitlines()
 		if lines:
 			lines = lines[1:]
-		# remove trailing fence
 		while lines and lines[-1].strip().startswith("```"):
 			lines.pop()
 		s = "\n".join(lines).strip()
@@ -40,9 +31,10 @@ _MD_ESC_RE = re.compile(r"(?<!\\)\\([nrt])")
 
 def _unescape_md_control_sequences(text: str) -> str:
 	"""
-	DeepSeek 有时会把换行写成字面量的 "\\n"（两个字符），导致粘贴到 Typora 变成一整块。
+	DeepSeek 有时会把换行写成字面量 "\\n"，导致粘贴到 Typora 变成一整块。
 	这里把常见控制序列还原成真实字符（仅处理未被转义的 \\n/\\r/\\t）。
 	"""
+
 	def repl(m: re.Match[str]) -> str:
 		ch = m.group(1)
 		if ch == "n":
@@ -75,11 +67,9 @@ def _build_full_item_template() -> dict[str, Any]:
 		"announcementContent": "",
 	}
 
-	# Keep field definitions identical to crawler extraction config.
 	for f in load_extract_fields(stage=None):
 		out.setdefault(f.key, _TYPE_DEFAULTS.get(f.type, ""))
 
-	# isEquipment：不确定时默认 true（召回优先）
 	if "isEquipment" in out:
 		out["isEquipment"] = True
 
@@ -96,20 +86,17 @@ def _normalize_item_to_crawler_schema(raw_item: dict[str, Any]) -> dict[str, Any
 	"""
 	template = _build_full_item_template()
 
-	# Merge known keys only.
 	item: dict[str, Any] = dict(template)
-	for k in template.keys():
-		if k in raw_item:
-			item[k] = raw_item[k]
+	for key in template.keys():
+		if key in raw_item:
+			item[key] = raw_item[key]
 
-	# Now normalize by type using the exact extract_fields.yaml field types (flat + lots).
-	# announcementUrl/Name/Content are always strings.
 	item["announcementUrl"] = ("" if item.get("announcementUrl") is None else str(item.get("announcementUrl"))).strip()
 	item["announcementName"] = ("" if item.get("announcementName") is None else str(item.get("announcementName"))).strip()
 	item["announcementContent"] = ("" if item.get("announcementContent") is None else str(item.get("announcementContent"))).strip()
 
-	for f in load_extract_fields(stage=None):
-		item[f.key] = normalize_field_value(f.key, item.get(f.key), f.type)
+	for field in load_extract_fields(stage=None):
+		item[field.key] = normalize_field_value(field.key, item.get(field.key), field.type)
 
 	item["lotProducts"] = supplement_lot_products_from_candidates(
 		item.get("lotProducts"),
@@ -130,7 +117,6 @@ async def _extract_normalize_item_fields(
 	"""
 	text = (src_text or "").strip()
 	if not text:
-		# Let extract_fields_from_text return the correct empty_result by stage.
 		return await extract_fields_from_text(
 			"",
 			site_name="normalize_item",
@@ -187,72 +173,9 @@ async def normalize_source_json_to_item(
 	*,
 	product_category_table: str | None = None,
 ) -> dict[str, Any]:
-	"""
-	Map arbitrary source JSON/text into our unified item template via multi-stage extraction:
-	- meta / contacts / address_detail / lots
-	(lots is a single call that outputs both lotProducts + lotCandidates)
+	from .normalize_item_graph import run_normalize_item_core_graph
 
-	Input is a raw text string (often a JSON blob mixed with other text). We feed it directly to the extractor.
-	"""
-	src = (source_json or "").strip()
-	template = _build_full_item_template()
-	if not src:
-		return template
-
-	meta_fields, contacts_fields, address_detail_fields, lots_fields = await asyncio.gather(
-		_extract_normalize_item_fields(src, stage="meta", product_category_table=None),
-		_extract_normalize_item_fields(src, stage="contacts", product_category_table=None),
-		_extract_normalize_item_fields(src, stage="address_detail", product_category_table=None),
-		_extract_normalize_item_fields(src, stage="lots", product_category_table=product_category_table),
-	)
-
-	merged = dict(template)
-	merged.update(meta_fields or {})
-	merged.update(contacts_fields or {})
-	merged.update(address_detail_fields or {})
-	merged["lotProducts"] = (lots_fields or {}).get("lotProducts") or []
-	merged["lotCandidates"] = (lots_fields or {}).get("lotCandidates") or []
-
-	raw_announcement_type = (meta_fields or {}).get("announcementType")
-	item = _normalize_item_to_crawler_schema(merged)
-	item["lotProducts"] = await fill_product_categories_after_lots(
-		item.get("lotProducts"),
-		site_name="normalize_item",
+	return await run_normalize_item_core_graph(
+		source_json,
 		product_category_table=product_category_table,
 	)
-
-	# 公告类别（13 选 1）强校验：
-	# - 不再“无法映射就兜底成招标”
-	# - 如果初次抽取不在范围内：调用 DeepSeek 做一次“类型归一化/分类”修复（最多 3 次）
-	if (item.get("announcementType") or "").strip() not in ANNOUNCEMENT_TYPES:
-		repaired = await repair_announcement_type(
-			site_name="normalize_item",
-			announcement_title=item.get("announcementName"),
-			announcement_content=item.get("announcementContent") or src,
-			raw_announcement_type=str(raw_announcement_type or merged.get("announcementType") or ""),
-			max_retries=3,
-		)
-		if not repaired:
-			raise AnnouncementTypeRepairError(
-				"announcementType invalid after 3 attempts",
-				raw_type=str(raw_announcement_type or merged.get("announcementType") or ""),
-				max_retries=3,
-			)
-		item["announcementType"] = repaired
-
-	# estimatedAmount：
-	# - 与 announcementType 无关。
-	# - 仅由“中标金额/候选人报价/标的物”决定：
-	#   1) 若有中标金额：直接取中标金额（输出范围 "x~x"）
-	#      - 优先 winnerAmount
-	#      - 其次第一位中标/中标候选人报价（lotCandidates[].candidatePrices）
-	#   2) 若无中标金额但有标的物：保留 LLM 预估价（需为范围 "lo~hi"）
-	#   3) 若无中标金额且无标的物：返回 ""
-	# 本阶段只做：按上述优先级覆盖/清空 + 正则校验（不做任何兜底/推导/再调用）。
-	await fill_estimated_amount_after_lots(
-		item,
-		site_name="normalize_item",
-		fields_path="normalize_item_meta_flat_fields.yaml",
-	)
-
-	return item

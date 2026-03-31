@@ -4,6 +4,7 @@
 browser-use>=0.11.2
 pydantic>=2.11.5
 langchain-openai>=0.3.0
+langgraph>=0.2.0
 
 # ===== 配置管理 =====
 PyYAML>=6.0.1
