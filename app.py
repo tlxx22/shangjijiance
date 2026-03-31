@@ -54,8 +54,9 @@ from src.api.crawl_session import CrawlSession, event_generator
 from src.config_manager import SiteConfig
 from src.logger_config import get_logger, init_logger, set_request_id, reset_request_id
 from src.embedding_client import get_text_embedding
-from src.llm_transform import convert_announcement_content_to_markdown
-from src.normalize_item_graph import run_normalize_item_graph
+from src.llm_transform import convert_announcement_content_to_markdown, normalize_source_json_to_item
+from src.address_normalizer import extract_admin_divisions_from_details
+from src.custom_tools import compute_data_id, _parse_address_parts_from_detail
 from src.announcement_type_repair import AnnouncementTypeRepairError
 from src.browser_use_budget import get_budget
 from src.parent_org_service import ParentOrgUpstreamError, resolve_parent_org_name
@@ -300,8 +301,21 @@ async def _bidcenter_proxy(request: Request, route_label: str):
         logger.error(f"{route_label} upstream error: {e}")
         raise HTTPException(502, f"Upstream request failed: {e}")
 
-    media = upstream.headers.get("Content-Type") or "application/json; charset=utf-8"
-    return Response(content=upstream.content, status_code=upstream.status_code, media_type=media)
+    try:
+        data = upstream.json()
+    except ValueError:
+        logger.error(
+            f"{route_label} upstream non-JSON (status={upstream.status_code}): "
+            f"{upstream.text[:500]!r}"
+        )
+        return JSONResponse(
+            status_code=502,
+            content={
+                "detail": "Upstream response is not valid JSON",
+                "upstream_status": upstream.status_code,
+            },
+        )
+    return JSONResponse(content=data, status_code=upstream.status_code)
 
 
 @app.post("/bidcenter/search")
@@ -403,7 +417,7 @@ async def content_to_md(http_request: Request):
 @app.post("/normalize_item", response_model=NormalizeItemResponse)
 async def normalize_item(http_request: Request):
     """
-    将任意来源文本映射为统一 item 模板。
+    将任意来源（第三方 API / Excel 等）的文本（推荐：中文标签 Markdown）映射为统一 item 模板（由 DeepSeek 生成）。
     """
     try:
         raw = await http_request.body()
@@ -418,10 +432,28 @@ async def normalize_item(http_request: Request):
             payload = {"sourceJson": text_fallback}
 
         req = NormalizeItemRequest.model_validate(payload)
-        item = await run_normalize_item_graph(
+        item = await normalize_source_json_to_item(
             req.sourceJson,
             product_category_table=req.productCategoryTable,
         )
+
+        # 地址字段：不再用正则拆分；改为一次调用 LLM 从三组 AddressDetail 提取 12 个字段。
+        # 规则：
+        # - AddressDetail 为空：country="中国"，省市区为空字符串
+        # - 整体最多重试 3 次；超过上限逐字段回退原值；只影响 12 个字段，不包含 AddressDetail
+        try:
+            addr = await extract_admin_divisions_from_details(
+                buyer_address_detail=item.get("buyerAddressDetail", ""),
+                project_address_detail=item.get("projectAddressDetail", ""),
+                delivery_address_detail=item.get("deliveryAddressDetail", ""),
+                original_item=item,
+                max_retries=3,
+            )
+            item.update(addr)
+        except Exception as norm_err:
+            logger.warning(f"/normalize_item 地址字段 LLM 提取失败（已跳过）: {norm_err}")
+
+        item["dataId"] = compute_data_id(item)
         return {"data": item}
     except ValueError as e:
         raise HTTPException(400, str(e))
