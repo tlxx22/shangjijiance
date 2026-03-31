@@ -59,7 +59,7 @@ from src.address_normalizer import extract_admin_divisions_from_details
 from src.custom_tools import compute_data_id, _parse_address_parts_from_detail
 from src.announcement_type_repair import AnnouncementTypeRepairError
 from src.browser_use_budget import get_budget
-from src.parent_org_service import ParentOrgUpstreamError, resolve_parent_org_name
+from src.parent_org_service import ParentOrgUpstreamError, resolve_parent_org_with_affiliate
 
 logger = get_logger()
 
@@ -487,14 +487,16 @@ async def parent_org_name(http_request: Request):
             payload = {"orgName": text_fallback}
 
         req = ParentOrgNameRequest.model_validate(payload)
-        result = await asyncio.to_thread(resolve_parent_org_name, req.orgName)
+        result = await asyncio.to_thread(resolve_parent_org_with_affiliate, req.orgName)
         logger.info(
             "/parent_org_name resolved "
-            f"orgName={req.orgName!r} route={result['route']} model={result['model']} "
+            f"orgName={req.orgName!r} affiliateOrgName={result['affiliateOrgName']!r} "
+            f"route={result['route']} model={result['model']} "
             f"parentOrgName={result['parentOrgName']!r} confidence={result['confidence']} "
             f"sources={len(result['sources'])}"
         )
         return {
+            "affiliateOrgName": result["affiliateOrgName"],
             "parentOrgName": result["parentOrgName"],
             "confidence": result["confidence"],
             "sources": result["sources"],

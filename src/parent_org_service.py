@@ -265,9 +265,24 @@ def _validate_payload(payload: dict[str, Any], source_index: dict[str, dict[str,
 		sources.append({"title": source["title"], "url": source["url"]})
 
 	if not sources:
-		raise ParentOrgUpstreamError("parent_org_name upstream returned no valid sourceUrls")
+		logger.warning(
+			"parent_org_name sourceUrls mismatch: model returned no URLs matching service-side search results"
+		)
+		sources = [{"title": "匹配失败", "url": "匹配失败"}]
 
 	return parent_org_name, confidence_value, sources
+
+
+def _validate_affiliate_payload(payload: dict[str, Any]) -> str:
+	affiliate_org_name = payload.get("affiliateOrgName")
+	if not isinstance(affiliate_org_name, str):
+		raise ParentOrgUpstreamError("parent_org_name upstream returned invalid affiliateOrgName")
+
+	affiliate_org_name = affiliate_org_name.strip()
+	if not affiliate_org_name:
+		raise ParentOrgUpstreamError("parent_org_name upstream returned empty affiliateOrgName")
+
+	return affiliate_org_name
 
 
 def _get_client_config() -> tuple[str, OpenAI, str]:
@@ -323,6 +338,69 @@ def _tool_schema() -> list[dict[str, Any]]:
 			},
 		}
 	]
+
+
+def resolve_affiliate_org_name(org_name: str) -> str:
+	original_org_name = (org_name or "").strip()
+	if not original_org_name:
+		return original_org_name
+
+	try:
+		route, client, model_name = _get_client_config()
+		response = client.chat.completions.create(
+			model=model_name,
+			messages=[
+				{
+					"role": "system",
+					"content": (
+						"You identify the affiliate company name for an input organization name.\n\n"
+						"Return ONLY one JSON object with exactly this field:\n"
+						"{\n"
+						'  "affiliateOrgName": "string"\n'
+						"}\n\n"
+						"Rules:\n"
+						"- The goal is the company subject this name belongs to, not the parent company and not the ultimate controller.\n"
+						"- If the input is a department or internal functional unit under a company, return the company subject only.\n"
+						"- If the input already is a company name, keep it unchanged.\n"
+						"- If the input is a branch company or office, keep the full branch or office name unchanged.\n"
+						"- If you are uncertain or the input does not clearly indicate a company subject, return the original input unchanged.\n"
+						"- Do not return Markdown, explanations, or extra fields.\n"
+					),
+				},
+				{
+					"role": "user",
+					"content": (
+						"请识别这个名称对应的“所属公司”。\n"
+						"要求：\n"
+						"1. 像“xxx公司采购部”这种，只保留所属公司“xxx公司”；\n"
+						"2. 像“xxx公司”这种，直接返回原名称；\n"
+						"3. 像“xxx公司山东分公司”或“xxx有限公司北京办事处”这种，保留完整名称，不要上提到总公司；\n"
+						"4. 如果无法可靠识别，返回原始输入。\n"
+						f"原始输入：{original_org_name}"
+					),
+				},
+			],
+		)
+		choices = _get_value(response, "choices", None) or []
+		if not choices:
+			raise ParentOrgUpstreamError("parent_org_name affiliate upstream returned no choices")
+
+		message = _get_value(choices[0], "message", None)
+		if message is None:
+			raise ParentOrgUpstreamError("parent_org_name affiliate upstream returned no message")
+
+		payload = _parse_json_object(_extract_message_content(message))
+		affiliate_org_name = _validate_affiliate_payload(payload)
+		logger.info(
+			f"parent_org_name affiliate orgName={original_org_name!r} affiliateOrgName={affiliate_org_name!r} "
+			f"route={route} model={model_name}"
+		)
+		return affiliate_org_name
+	except Exception as exc:
+		logger.warning(
+			f"parent_org_name affiliate fallback orgName={original_org_name!r}: {exc}"
+		)
+		return original_org_name
 
 
 def resolve_parent_org_name(org_name: str) -> dict[str, Any]:
@@ -417,3 +495,16 @@ def resolve_parent_org_name(org_name: str) -> dict[str, Any]:
 		}
 
 	raise ParentOrgUpstreamError(f"parent_org_name exceeded max tool rounds ({MAX_TOOL_ROUNDS})")
+
+
+def resolve_parent_org_with_affiliate(org_name: str) -> dict[str, Any]:
+	affiliate_org_name = resolve_affiliate_org_name(org_name)
+	result = resolve_parent_org_name(affiliate_org_name)
+	return {
+		"affiliateOrgName": affiliate_org_name,
+		"parentOrgName": result["parentOrgName"],
+		"confidence": result["confidence"],
+		"sources": result["sources"],
+		"route": result["route"],
+		"model": result["model"],
+	}

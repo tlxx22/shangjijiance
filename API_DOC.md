@@ -413,7 +413,7 @@ curl -X POST http://localhost:8000/embedding \
 
 ## POST /parent_org_name
 
-根据输入的公司/组织名称，联网搜索并判断其“最接近上级”组织。
+根据输入的公司/组织名称，先识别其“所属公司”，再联网搜索并判断其“最接近上级”组织。
 
 ### 请求
 
@@ -426,10 +426,18 @@ curl -X POST http://localhost:8000/embedding \
 ```
 
 说明：
+- `affiliateOrgName` 是前置节点识别出的“所属公司”名称：
+  - `xxx公司采购部` → `xxx公司`
+  - `xxx公司` → `xxx公司`
+  - `xxx公司山东分公司` / `xxx有限公司北京办事处` → 保留完整名称
+  - 无法稳定识别时回退为原始输入
 - `parentOrgName` 直接返回模型原始输出；服务端不做 trim，也不会因为与输入相同而清空。
 - `confidence` 为 `0~1` 浮点数。
 - `sources` 来自服务端本地调用博查 Web Search API 的真实搜索结果，并按模型返回的 `sourceUrls` 做校验和映射，不是模型自由编造的来源。
-- 内部实现不是模型内置联网，而是服务端先接入博查搜索，再通过 `chat/completions` + 自定义 function tool `bocha_web_search` 让模型使用搜索结果。
+- 如果模型返回的 `sourceUrls` 与服务端实际搜索结果一个都匹配不上，接口不再报 502，而是返回占位值：`[{"title":"匹配失败","url":"匹配失败"}]`。
+- 内部实现分两步：
+  1. 先用一个不联网的 LLM 节点识别 `affiliateOrgName`
+  2. 再由服务端接入博查搜索，并通过 `chat/completions` + 自定义 function tool `bocha_web_search` 让模型判断最近上级组织
 - 路由选择：
   - `ROUTE="openai"`：使用 `OPENAI_BASE_URL` + `OPENAI_API_KEY` + `OPENAI_MODEL`（若配置了 `OPENAI_PARENT_ORG_MODEL` 则优先使用它）。
   - `ROUTE="sany"`：使用 `SANY_AI_GATEWAY_BASE_URL` + `SANY_AI_GATEWAY_KEY`，模型优先取 `SANY_PARENT_ORG_MODEL`，否则回退到 `SANY_EXTRACT_MODEL`，并自动注入 `X-ai-server`。
@@ -440,6 +448,7 @@ curl -X POST http://localhost:8000/embedding \
 
 ```json
 {
+  "affiliateOrgName": "中国化学工程第三建设有限公司山东分公司",
   "parentOrgName": "中国化学工程第三建设有限公司",
   "confidence": 0.82,
   "sources": [

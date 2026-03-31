@@ -96,6 +96,7 @@ class ParentOrgSource(BaseModel):
 
 class ParentOrgNameResponse(BaseModel):
     """母公司/上级组织查询响应"""
+    affiliateOrgName: str = Field(description="前置节点识别出的所属公司名称")
     parentOrgName: str = Field(description="模型输出的原始 parentOrgName")
     confidence: float = Field(ge=0, le=1, description="0~1 之间的置信度")
     sources: list[ParentOrgSource] = Field(description="联网搜索真实来源")
