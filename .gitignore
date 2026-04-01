@@ -47,3 +47,6 @@ resp.json
 # validation dataset
 val.yaml
 validate/
+.omx/
+.codex/
+AGENTS.md
