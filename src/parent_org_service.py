@@ -361,9 +361,9 @@ def resolve_affiliate_org_name(org_name: str) -> str:
 						"Rules:\n"
 						"- The goal is the company subject this name belongs to, not the parent company and not the ultimate controller.\n"
 						"- If the input is a department or internal functional unit under a company, return the company subject only.\n"
+						"- If the input is a project-level internal organization under a company, such as a 项目经理部, 项目部, 指挥部, 总承包部, or similar project organization, return the company subject only.\n"
 						"- If the input already is a company name, keep it unchanged.\n"
 						"- If the input is a branch company or office, keep the full branch or office name unchanged.\n"
-						"- If you are uncertain or the input does not clearly indicate a company subject, return the original input unchanged.\n"
 						"- Do not return Markdown, explanations, or extra fields.\n"
 					),
 				},
@@ -375,7 +375,8 @@ def resolve_affiliate_org_name(org_name: str) -> str:
 						"1. 像“xxx公司采购部”这种，只保留所属公司“xxx公司”；\n"
 						"2. 像“xxx公司”这种，直接返回原名称；\n"
 						"3. 像“xxx公司山东分公司”或“xxx有限公司北京办事处”这种，保留完整名称，不要上提到总公司；\n"
-						"4. 如果无法可靠识别，返回原始输入。\n"
+						"4. 像“xxx公司某项目经理部”“xxx公司某标段项目部”“xxx公司某工程指挥部”这种项目组织，只保留所属公司“xxx公司”；\n"
+						"5. 如果输入中能识别到明确的公司主体，就返回该公司主体，不要因为后面跟着项目、标段、经理部、项目部、指挥部等字样就保留整串名称。\n"
 						f"原始输入：{original_org_name}"
 					),
 				},
@@ -420,6 +421,9 @@ def resolve_parent_org_name(org_name: str) -> dict[str, Any]:
 				'  "sourceUrls": ["https://..."]\n'
 				"}\n\n"
 				"Rules:\n"
+				'- Use confidence to reflect uncertainty; do not use empty string only because confidence is low.\n'
+				'- If the answer would otherwise be a placeholder such as "无", "未知", "暂无", "不详", "N/A", or similar text, set "parentOrgName" to "" instead.\n'
+				'- "parentOrgName" must be an organization or company name, not a person name, not a contact, and not a job title or role such as chairman, legal representative, or general manager; if you would otherwise return a person name or role title, set "parentOrgName" to "" instead.\n'
 				"- sourceUrls must contain only real URLs returned by the tool.\n"
 				"- Always return the single most suitable result.\n"
 				"- Do not return Markdown, explanations, or extra fields.\n"
@@ -427,7 +431,14 @@ def resolve_parent_org_name(org_name: str) -> dict[str, Any]:
 		},
 		{
 			"role": "user",
-			"content": f"请先调用搜索工具，再判断这个公司/组织名称对应的“最接近上级”组织。\n输入名称：{org_name}",
+			"content": (
+				"请先调用搜索工具，再判断这个公司/组织名称对应的“最接近上级”组织。\n"
+				"要求：\n"
+				"1. 置信度用于体现不确定性，不要因为置信度低就直接把 parentOrgName 置空；\n"
+				"2. 但如果你本来会填“无”“未知”“暂无”等占位内容，必须改成空字符串 \"\"；\n"
+				"3. parentOrgName 必须是公司或组织名称，不要填写董事长、法定代表人、总经理、联系人等人名或职务；如果只能得到这类内容，也必须返回空字符串 \"\"；\n"
+				f"输入名称：{org_name}"
+			),
 		},
 	]
 
