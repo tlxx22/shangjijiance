@@ -424,6 +424,8 @@ def resolve_parent_org_name(org_name: str) -> dict[str, Any]:
 				'- Use confidence to reflect uncertainty; do not use empty string only because confidence is low.\n'
 				'- If the answer would otherwise be a placeholder such as "无", "未知", "暂无", "不详", "N/A", or similar text, set "parentOrgName" to "" instead.\n'
 				'- "parentOrgName" must be an organization or company name, not a person name, not a contact, and not a job title or role such as chairman, legal representative, or general manager; if you would otherwise return a person name or role title, set "parentOrgName" to "" instead.\n'
+				'- Prefer the full official or legal organization name instead of an abbreviation, alias, or historical short name whenever the sources support the full name.\n'
+				'- If the sources show both a short name and a full name for the same organization, return the full name.\n'
 				"- sourceUrls must contain only real URLs returned by the tool.\n"
 				"- Always return the single most suitable result.\n"
 				"- Do not return Markdown, explanations, or extra fields.\n"
@@ -437,6 +439,7 @@ def resolve_parent_org_name(org_name: str) -> dict[str, Any]:
 				"1. 置信度用于体现不确定性，不要因为置信度低就直接把 parentOrgName 置空；\n"
 				"2. 但如果你本来会填“无”“未知”“暂无”等占位内容，必须改成空字符串 \"\"；\n"
 				"3. parentOrgName 必须是公司或组织名称，不要填写董事长、法定代表人、总经理、联系人等人名或职务；如果只能得到这类内容，也必须返回空字符串 \"\"；\n"
+				"4. 如果来源里同时出现简称和全称，优先返回全称，不要返回简称；\n"
 				f"输入名称：{org_name}"
 			),
 		},

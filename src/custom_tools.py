@@ -1191,6 +1191,11 @@ Rules:
 				"- Highest-priority exclusions: if the project is clearly about construction service / engineering works / EPC construction / general contracting / professional construction / works defined by drawings or BOQ, output false.\n"
 				"  Indicators include: procurement category like 工程-施工, wording such as 施工服务 / 工程施工 / 施工总承包 / 专业施工 / 施工图及工程量清单内全部工程施工 / 房屋建筑工程施工 / 土建施工, or qualification requirements centered on construction capability rather than equipment ownership transfer.\n"
 				"  Even if equipment names such as 生产线 / 装载机 / 叉车 appear in the title, body, or procurement list, do NOT output true when the project essence is construction service. Example: the notice '2026年杨河乡草产业综合加工项目' with category 工程-施工 and content 本项目施工图及工程量清单内全部工程施工 should be false.\n"
+				"- Highest-priority exclusions: if the procurement target is clearly a 系统类 or 配套类 target rather than a standalone whole machine / complete equipment purchase, output false.\n"
+				"  This business scope only counts standalone whole-machine procurement. 系统、配套、配套件 and similar targets are OUT of scope.\n"
+				"  Indicators include wording in the title / project name / target description such as 系统、巡检系统、监测系统、平台系统、成套系统、配套、配套采购、配套件.\n"
+				"  Examples that must be false include '无人机安全巡检系统' and '发动机配套缸体采购'.\n"
+				"  Even if equipment names appear, do NOT output true when the actual target is a system solution, ancillary package, or non-whole-machine scope.\n"
 				"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
 				"- If uncertain, output true.\n"
 			)
@@ -1425,6 +1430,11 @@ Rules:
 				"- Highest-priority exclusions: if the project is clearly about construction service / engineering works / EPC construction / general contracting / professional construction / works defined by drawings or BOQ, output false.\n"
 				"  Indicators include: procurement category like 工程-施工, wording such as 施工服务 / 工程施工 / 施工总承包 / 专业施工 / 施工图及工程量清单内全部工程施工 / 房屋建筑工程施工 / 土建施工, or qualification requirements centered on construction capability rather than equipment ownership transfer.\n"
 				"  Even if equipment names such as 生产线 / 装载机 / 叉车 appear in the title, body, or procurement list, do NOT output true when the project essence is construction service. Example: the notice '2026年杨河乡草产业综合加工项目' with category 工程-施工 and content 本项目施工图及工程量清单内全部工程施工 should be false.\n"
+				"- Highest-priority exclusions: if the procurement target is clearly a 系统类 or 配套类 target rather than a standalone whole machine / complete equipment purchase, output false.\n"
+				"  This business scope only counts standalone whole-machine procurement. 系统、配套、配套件 and similar targets are OUT of scope.\n"
+				"  Indicators include wording in the title / project name / target description such as 系统、巡检系统、监测系统、平台系统、成套系统、配套、配套采购、配套件.\n"
+				"  Examples that must be false include '无人机安全巡检系统' and '发动机配套缸体采购'.\n"
+				"  Even if equipment names appear, do NOT output true when the actual target is a system solution, ancillary package, or non-whole-machine scope.\n"
 				"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
 				"- If uncertain, output true.\n"
 			)
