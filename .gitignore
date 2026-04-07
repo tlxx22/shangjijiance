@@ -43,6 +43,7 @@ shangjijiance-api.tar
 /test*.py
 test*.json
 resp.json
+tests/
 
 # validation dataset
 val.yaml
