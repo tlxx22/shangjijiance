@@ -1224,6 +1224,7 @@ async def extract_fields_from_html(
 	include_estimated_amount = any(getattr(f, "key", "") == "estimatedAmount" for f in fields)
 	include_is_equipment = any(getattr(f, "key", "") == "isEquipment" for f in fields)
 	include_announcement_date = any(getattr(f, "key", "") == "announcementDate" for f in fields)
+	include_project_id = any(getattr(f, "key", "") == "projectId" for f in fields)
 
 	system_prompt = f"""
 You are an information extraction engine.
@@ -1280,6 +1281,17 @@ Rules:
 				"- If both the page header metadata and the body contain dates, use the explicit publish date from the header / top metadata area first.\n"
 				"- Do NOT infer announcementDate from arbitrary dates in the body such as delivery dates, bid opening dates, contract periods, project schedule dates, or countdown-related dates.\n"
 				"- Only if the page has no clearly labeled publish-date metadata field may you fall back to another explicitly labeled publish date elsewhere in the content.\n"
+			)
+
+	if include_project_id:
+			system_prompt += (
+				"\n\n"
+				"Special rule for projectId:\n"
+				"- Prefer an explicitly labeled identifier field from the detail header / top metadata area of the page.\n"
+				"- In practice, prioritize clearly labeled values such as 项目编号 / 招标编号 / 采购编号 / 询价单号 / 合同编号 / 公告编号 when they appear near the title or in the metadata block at the beginning of the page.\n"
+				"- If the same metadata block contains both 招标编号 and 招标项目编号, prefer the value of 招标编号.\n"
+				"- Do NOT infer projectId from arbitrary numbers in the body, title, dates, phone numbers, or amounts.\n"
+				"- Only if the page has no clearly labeled identifier in the header / top metadata area may you fall back to another explicitly labeled identifier elsewhere in the content.\n"
 			)
 
 	if include_estimated_amount:
