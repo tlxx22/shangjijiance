@@ -20,6 +20,9 @@ logger = get_logger()
 _DETAIL_READY_SELECTORS = (
 	".content_body_box_body",
 	".home_fulltext",
+	".ccui-notice-app-container-detail-left",
+	".ccui-notice-app-container-detail-body",
+	".ccui-notice-app-container-detail",
 	".notice-detail-li-con.rich-text",
 	".notice-detail-li-con",
 	".rich-text",
@@ -33,9 +36,76 @@ _DETAIL_READY_SELECTORS = (
 	".template-notice-detail-left",
 )
 
+_DETAIL_HEADER_SELECTORS = (
+	".ccui-notice-app-container-detail-left",
+	".ccui-notice-app-container-detail-body",
+	".ccui-notice-app-container-detail",
+	".notice-title",
+	".notice-project-info",
+	".detail-title",
+	".article-title",
+	".project-info",
+	".notice-info",
+	".base-info",
+	"[class*='title']",
+	"[class*='header']",
+	"[class*='project-info']",
+	"[class*='notice-info']",
+	"[class*='meta']",
+	"[id*='title']",
+	"[id*='header']",
+)
+
 
 _MAX_FILENAME_COMPONENT_BYTES = 240  # conservative across Windows/Linux filesystems
 _MAX_WINDOWS_PATH_CHARS = 240  # conservative to avoid Win32 MAX_PATH issues in some environments
+
+
+def _extract_plain_text_from_html_fragment(html: str) -> str:
+	if not html:
+		return ""
+	try:
+		from bs4 import BeautifulSoup
+	except Exception:
+		return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html or "")).strip()
+
+	soup = BeautifulSoup(html, "html.parser")
+	return re.sub(r"\s+", " ", soup.get_text(" ", strip=True)).strip()
+
+
+def _combine_detail_header_and_main_html(
+	*,
+	header_html: str,
+	main_html: str,
+	header_relation: str,
+) -> str:
+	main = (main_html or "").strip()
+	header = (header_html or "").strip()
+	relation = (header_relation or "").strip().lower()
+
+	if not main:
+		return header
+	if not header:
+		return main
+	if relation in {"same", "ancestor", "descendant"}:
+		return main
+	if header == main:
+		return main
+	if header in main:
+		return main
+	if main in header:
+		return header
+
+	header_text = _extract_plain_text_from_html_fragment(header)
+	main_text = _extract_plain_text_from_html_fragment(main)
+	if not header_text or not main_text:
+		return main
+	if header_text in main_text:
+		return main
+	if main_text in header_text:
+		return header
+
+	return f"<div>{header}{main}</div>"
 
 
 def _truncate_to_utf8_bytes(text: str, max_bytes: int) -> str:
@@ -1153,6 +1223,7 @@ async def extract_fields_from_html(
 
 	include_estimated_amount = any(getattr(f, "key", "") == "estimatedAmount" for f in fields)
 	include_is_equipment = any(getattr(f, "key", "") == "isEquipment" for f in fields)
+	include_announcement_date = any(getattr(f, "key", "") == "announcementDate" for f in fields)
 
 	system_prompt = f"""
 You are an information extraction engine.
@@ -1198,6 +1269,17 @@ Rules:
 				"  Even if equipment names appear, do NOT output true when the actual target is a system solution, ancillary package, or non-whole-machine scope.\n"
 				"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
 				"- If uncertain, output true.\n"
+			)
+
+	if include_announcement_date:
+			system_prompt += (
+				"\n\n"
+				"Special rule for announcementDate:\n"
+				"- Prefer an explicitly labeled publish-date metadata field from the detail header / top metadata area of the page.\n"
+				"- In practice, prioritize clearly labeled values such as 发布时间 / 发布日期 / 公告时间 / 公告日期 when they appear near the title or in the metadata block at the beginning of the page.\n"
+				"- If both the page header metadata and the body contain dates, use the explicit publish date from the header / top metadata area first.\n"
+				"- Do NOT infer announcementDate from arbitrary dates in the body such as delivery dates, bid opening dates, contract periods, project schedule dates, or countdown-related dates.\n"
+				"- Only if the page has no clearly labeled publish-date metadata field may you fall back to another explicitly labeled publish date elsewhere in the content.\n"
 			)
 
 	if include_estimated_amount:
@@ -1932,6 +2014,15 @@ def _html_to_clean_content_html(html: str, site_name: str) -> str:
 	):
 		el.decompose()
 
+	# Remove known detail-header functional chrome while preserving left-side metadata.
+	for el in soup.select(
+		".ccui-notice-app-container-detail-right,"
+		".notice-timeout-label,"
+		".notice-timeout-value,"
+		".notice-timeout-btn"
+	):
+		el.decompose()
+
 	# Drop hidden elements / dialogs.
 	for el in soup.select('[hidden], [aria-hidden="true"], [role="dialog"], [aria-modal="true"]'):
 		el.decompose()
@@ -2078,6 +2169,7 @@ async def extract_page_content(
 		with contextlib.suppress(Exception):
 			state = await browser_session.get_browser_state_summary(include_screenshot=False)
 			state_url = str(getattr(state, "url", "") or "").strip() or None
+		header_selectors_json = repr(list(_DETAIL_HEADER_SELECTORS))
 
 		stage = "get_or_create_cdp_session"
 		if cdp_session is None:
@@ -2087,12 +2179,14 @@ async def extract_page_content(
 		try:
 			html_result = await cdp_session.cdp_client.send.Runtime.evaluate(
 				params={
-					"expression": """
+					"expression": (
+"""
 (() => {
   // Try to extract the *detail content container* first.
   // Some sites render the main content inside same-origin iframes (e.g. srcdoc). In that case, prefer the iframe doc.
   // Some sites (e.g. sp.iccec.cn) have a huge navigation shell; returning full DOM makes Markdown very noisy.
   const keywords = ['公告内容', '公告标题', '项目编号', '发布时间', '附件列表', '物资信息', '相关公告列表'];
+  const headerSelectors = __HEADER_SELECTORS__;
   const body = document.body || document.documentElement;
   if (!body) return '';
   function isVisible(el) {
@@ -2176,6 +2270,13 @@ async def extract_page_content(
       return `${className} ${el.id || ''}`.toLowerCase();
     } catch (e) { return ''; }
   }
+  function textSignals(text, patterns) {
+    let hits = 0;
+    for (const pattern of patterns) {
+      if (text.includes(pattern)) hits++;
+    }
+    return hits;
+  }
   function score(el) {
     if (!isVisible(el)) return -1e18;
     const t = textOf(el);
@@ -2192,6 +2293,39 @@ async def extract_page_content(
     if (/(article|paragraph|notice|detail|rich-text|content|material|attachment)/.test(classId)) bonus += 3000;
     if (/(header|footer|nav|breadcrumb|search|menu|help|copy-right|copyright|catalog|classes|service)/.test(classId)) bonus -= 6000;
     return hits * 20000 + len + tables * 500 - links * 200 - lis * 50 + bonus;
+  }
+  function headerScore(el) {
+    if (!isVisible(el)) return -1e18;
+    const t = textOf(el);
+    const len = t.length;
+    if (len < 20) return -1e18;
+    const classId = classIdText(el);
+    const buttons = count(el, 'button') + count(el, 'input') + count(el, 'select') + count(el, 'textarea') + count(el, '[role="button"]');
+    const interactiveLinks = countMeaningfulLinks(el);
+    const metaHits = textSignals(t, ['项目编号', '发布时间', '公告时间', '项目名称']);
+    const classHits = textSignals(classId, ['title', 'header', 'project-info', 'notice-info', 'meta']);
+    let bonus = classHits * 2200 + metaHits * 1800;
+    if (/ccui-notice-app-container-detail-left/.test(classId)) bonus += 2500;
+    if (/ccui-notice-app-container-detail-body/.test(classId)) bonus += 800;
+    if (/ccui-notice-app-container-detail\b/.test(classId)) bonus += 500;
+    if (/(right|timeout|btn|button|action)/.test(classId)) bonus -= 5000;
+    bonus -= buttons * 1500;
+    bonus -= interactiveLinks * 250;
+    if (len < 60 && buttons > 0) bonus -= 5000;
+    if (len > 2000) bonus -= 1000;
+    return bonus + len;
+  }
+  function cloneForOutput(el) {
+    const clone = el.cloneNode(true);
+    try { clone.querySelectorAll('script,style,noscript').forEach(node => node.remove()); } catch (e) {}
+    return clone;
+  }
+  function cloneHeaderForOutput(el) {
+    const clone = cloneForOutput(el);
+    try {
+      clone.querySelectorAll('.ccui-notice-app-container-detail-right,.notice-timeout-label,.notice-timeout-value,.notice-timeout-btn').forEach(node => node.remove());
+    } catch (e) {}
+    return clone;
   }
 
   // 1) Fast path: common detail containers
@@ -2235,12 +2369,48 @@ async def extract_page_content(
     }
   }
 
-  // 3) Fallback: full DOM snapshot then let Python-side cleanup handle it.
-  const root = (best || document.documentElement || body).cloneNode(true);
-  try { root.querySelectorAll('script,style,noscript').forEach(el => el.remove()); } catch (e) {}
-  return root.outerHTML || '';
+  let bestHeader = null;
+  let bestHeaderScore = -1e18;
+  for (const selector of headerSelectors) {
+    const nodes = body.querySelectorAll(selector);
+    for (const node of nodes) {
+      if (!isVisible(node)) continue;
+      const s = headerScore(node);
+      if (s > bestHeaderScore) {
+        bestHeaderScore = s;
+        bestHeader = node;
+      }
+    }
+  }
+
+  const mainNode = best || document.documentElement || body;
+  const mainClone = cloneForOutput(mainNode);
+  const mainHtml = mainClone.outerHTML || '';
+  const mainText = textOf(mainNode);
+
+  let headerHtml = '';
+  let headerText = '';
+  let headerRelation = '';
+  if (bestHeader) {
+    headerText = textOf(bestHeader);
+    if (bestHeader === mainNode) headerRelation = 'same';
+    else if (bestHeader.contains && bestHeader.contains(mainNode)) headerRelation = 'ancestor';
+    else if (mainNode.contains && mainNode.contains(bestHeader)) headerRelation = 'descendant';
+    else headerRelation = 'disjoint';
+    headerHtml = cloneHeaderForOutput(bestHeader).outerHTML || '';
+  }
+
+  return {
+    html: mainHtml,
+    mainHtml,
+    mainText,
+    headerHtml,
+    headerText,
+    headerRelation,
+  };
 })()
-""",
+"""
+					).replace("__HEADER_SELECTORS__", header_selectors_json),
 					"returnByValue": True,
 				},
 				session_id=cdp_session.session_id,
@@ -2262,6 +2432,9 @@ async def extract_page_content(
 
 		stage = "parse_runtime_result"
 		html = ""
+		main_html = ""
+		header_html = ""
+		header_relation = ""
 		result_type = ""
 		result_subtype = ""
 		if isinstance(html_result, dict):
@@ -2275,6 +2448,11 @@ async def extract_page_content(
 				v = r.get("value")
 				if isinstance(v, str):
 					html = v
+				elif isinstance(v, dict):
+					html = str(v.get("html") or "").strip()
+					main_html = str(v.get("mainHtml") or "").strip()
+					header_html = str(v.get("headerHtml") or "").strip()
+					header_relation = str(v.get("headerRelation") or "").strip()
 		elif html_result is None:
 			logger.debug(
 				f"[{site_name}] Runtime.evaluate returned None"
@@ -2308,6 +2486,18 @@ async def extract_page_content(
 					f"fallback_readyState={fallback_value.get('readyState') if isinstance(fallback_value, dict) else ''}"
 				)
 				return ""
+
+		stage = "merge_header_main"
+		if main_html and header_html:
+			html = _combine_detail_header_and_main_html(
+				header_html=header_html,
+				main_html=main_html,
+				header_relation=header_relation,
+			)
+		elif main_html:
+			html = main_html
+		elif header_html:
+			html = header_html
 
 		stage = "cleanup"
 		try:

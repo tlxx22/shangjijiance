@@ -9,12 +9,14 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 import uuid
 
 import requests
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
+from browser_use import BrowserSession
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -39,6 +41,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
 from src.api.models import (
+    CrawlDetailRequest,
+    CrawlDetailResponse,
     CrawlRequest,
     EmbeddingRequest,
     EmbeddingResponse,
@@ -53,6 +57,7 @@ from src.api.models import (
 )
 from src.api.prompt_manager import load_prompt_template, render_prompt
 from src.api.crawl_session import CrawlSession, event_generator
+from src.crawl_detail_graph import run_crawl_detail_graph
 from src.config_manager import SiteConfig
 from src.logger_config import get_logger, init_logger, set_request_id, reset_request_id
 from src.embedding_client import get_text_embedding
@@ -62,6 +67,7 @@ from src.custom_tools import compute_data_id, _parse_address_parts_from_detail
 from src.announcement_type_repair import AnnouncementTypeRepairError
 from src.browser_use_budget import get_budget
 from src.parent_org_service import ParentOrgUpstreamError, resolve_parent_org_with_affiliate
+from src.site_processor import get_browser_user_agent
 
 logger = get_logger()
 
@@ -239,6 +245,68 @@ async def crawl(request: CrawlRequest, http_request: Request):
 async def browser_billing():
     """浏览器计费"""
     return browser_billing_logic()
+
+
+@app.post("/crawl_detail", response_model=CrawlDetailResponse)
+async def crawl_detail(req: CrawlDetailRequest):
+    """
+    直接抓取单个详情页并返回结构化 JSON。
+    """
+    browser_session: BrowserSession | None = None
+    try:
+        site_name = urlparse(str(req.url)).netloc or "single_detail"
+        user_agent = get_browser_user_agent(headless=req.headless)
+        browser_session = BrowserSession(
+            headless=req.headless,
+            user_agent=user_agent,
+            keep_alive=False,
+            auto_download_pdfs=False,
+            enable_default_extensions=False,
+        )
+        await browser_session.start()
+        await browser_session.navigate_to(str(req.url))
+
+        with tempfile.TemporaryDirectory() as td:
+            graph_result = await run_crawl_detail_graph(
+                browser_session=browser_session,
+                site_name=site_name,
+                output_dir=Path(td),
+                title=req.name,
+                date="",
+                product_category_table=None,
+                engineering_machinery_only=False,
+                on_item_saved=None,
+                locked_list_url=None,
+                seen_detail_keys=set(),
+            )
+
+        outcome_code = str(graph_result.get("outcome_code") or "")
+        if outcome_code != "success":
+            action_result = dict(graph_result.get("action_result") or {})
+            raise HTTPException(
+                422,
+                {
+                    "message": action_result.get("error") or action_result.get("extracted_content") or "crawl_detail failed",
+                    "outcomeCode": outcome_code,
+                },
+            )
+
+        return {"data": dict(graph_result.get("result_data") or {})}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+    except Exception as e:
+        logger.error(f"/crawl_detail failed: {e}")
+        raise HTTPException(502, f"Upstream crawl_detail error: {e}")
+    finally:
+        if browser_session is not None:
+            try:
+                await browser_session.kill()
+            except Exception:
+                pass
 
 async def _form_dict_from_request(request: Request) -> dict:
     ct = (request.headers.get("content-type") or "").lower()

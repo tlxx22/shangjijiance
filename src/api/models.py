@@ -86,6 +86,18 @@ class NormalizeItemResponse(BaseModel):
     data: dict = Field(description="统一 item 模板 JSON")
 
 
+class CrawlDetailRequest(BaseModel):
+    """单个详情页抓取请求"""
+    url: HttpUrl = Field(description="详情页完整 URL")
+    name: constr(min_length=1) = Field(description="详情标题/名称")
+    headless: bool = Field(default=True, description="是否使用无头浏览器，默认 true")
+
+
+class CrawlDetailResponse(BaseModel):
+    """单个详情页抓取响应"""
+    data: dict = Field(description="详情页结构化结果 JSON")
+
+
 class ParentOrgNameRequest(BaseModel):
     """母公司/上级组织查询请求"""
     orgName: constr(min_length=1) = Field(description="待查询的公司或组织名称")
