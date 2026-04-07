@@ -2245,7 +2245,7 @@ async def extract_page_content(
     }
 
     // Prefer iframe only when it is clearly more informative than the outer page.
-    if (bestIframeHtml && bestIframeTextLen >= 800 && bestIframeTextLen >= outerTextLen * 2) {
+    if (bestIframeHtml && bestIframeTextLen >= 100) {
       return bestIframeHtml;
     }
   } catch (e) {}
