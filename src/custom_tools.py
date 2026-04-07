@@ -2609,322 +2609,34 @@ def create_save_detail_tools(
 		date = params.date
 
 		logger.info(f"[{site_name}] 保存详情页: {title[:40]}...")
-
-		detail_url: str | None = None
-		cdp_session: Any | None = None
 		try:
-			# 1. 确保输出目录存在
-			output_dir.mkdir(parents=True, exist_ok=True)
+			from .crawl_detail_graph import run_crawl_detail_graph
 
-			# 2. 获取当前页面URL
-			try:
-				cdp_session = await browser_session.get_or_create_cdp_session()
-				url_result = await cdp_session.cdp_client.send.Runtime.evaluate(
-					params={'expression': 'location.href', 'returnByValue': True},
-					session_id=cdp_session.session_id
-				)
-				detail_url = url_result.get('result', {}).get('value', 'unknown')
-			except Exception as e:
-				logger.warning(f"获取URL失败: {e}")
-				detail_url = "unknown"
-
-			# 2.2 保护：如果还停留在列表页（URL 仍是列表页 URL），说明并未真正进入详情页。
-			# 这种情况下继续保存会把“列表页 URL”写进去，导致去重误判、甚至把列表页当详情页保存。
-			try:
-				from urllib.parse import urlsplit
-
-				if _locked_list_url and detail_url and detail_url not in ("unknown", ""):
-					list_parts = urlsplit(_locked_list_url)
-					cur_parts = urlsplit(detail_url)
-					same_origin_path = (
-						list_parts.scheme == cur_parts.scheme
-						and list_parts.netloc == cur_parts.netloc
-						and list_parts.path == cur_parts.path
-					)
-					# NOTE: Some SPA sites keep the same path and only change the fragment (#...).
-					# In that case, treat it as "still on list page" ONLY when the fragment also matches.
-					# Otherwise we'd incorrectly close the newly opened detail tab and report not_on_detail_page.
-					if same_origin_path:
-						list_frag = (list_parts.fragment or "").strip()
-						cur_frag = (cur_parts.fragment or "").strip()
-						if list_frag or cur_frag:
-							same_fragment = (list_frag == cur_frag)
-						else:
-							same_fragment = True
-						if not same_fragment:
-							# Different fragment under same path: likely navigated within SPA (e.g. list -> detail).
-							same_origin_path = False
-					if same_origin_path:
-						logger.warning(
-							f"[{site_name}] ⚠️ save_detail 在列表页被调用（URL 未进入详情页）: {detail_url}"
-						)
-						with contextlib.suppress(Exception):
-							await _tab_gc(browser_session)
-						return ActionResult(
-							extracted_content=(
-								"当前仍在列表页（URL 未进入详情页），请改用 open_and_save(标题链接index, title, date) "
-								"或先切换到真正的详情页标签后再调用 save_detail。"
-							),
-							error="not_on_detail_page",
-						)
-			except Exception:
-				# 保护逻辑失败不应阻断正常保存
-				pass
-
-			# 2.5 去重：网站列表可能在爬取过程中从第一页插入新公告，导致后续页码内容“整体后移”并出现重复。
-			# 这里以“详情页 URL”为主键去重；取不到 URL 时退化为 title+date。
-			file_date = normalize_date_ymd(date) or str(date).replace("/", "-").replace(".", "-")
-			dedup_key = (detail_url or "").strip()
-			if not dedup_key or dedup_key == "unknown":
-				dedup_key = f"{title.strip()}|{file_date}"
-
-			if dedup_key in seen_detail_keys:
-				logger.info(f"[{site_name}] ↩︎ 重复公告已跳过: {title[:40]}... ({dedup_key[:80]})")
-				# 仍需回到列表页并回收多余 tab，避免 Agent 后续在详情页继续点 index 导致混乱
-				with contextlib.suppress(Exception):
-					await _return_to_list_after_save(browser_session, current_url=str(detail_url or ""))
-				return ActionResult(
-					extracted_content="skipped_duplicate",
-					long_term_memory=f"重复公告已跳过: {title[:30]}..."
-				)
-			# 注意：不要在这里把 dedup_key 记入 seen_detail_keys。
-			# 原因：save_detail 可能失败或被要求“重试 1 次”（全局规则），
-			# 若提前记入会导致后续重试直接被当作 duplicate 跳过，造成漏抓。
-
-			# 3. 尝试点击"查看完整信息"按钮（展开脱敏内容）
-			await click_show_full_info(browser_session)
-			# 一些站点详情内容是 SPA 异步渲染的，需显式等待正文容器出现。
-			await _wait_for_detail_content_ready(browser_session, site_name, cdp_session=cdp_session)
-
-			# 4. 提取公告原文（HTML，不做 Markdown 转换）
-			announcement_content = await extract_page_content(
-				browser_session,
-				site_name,
-				cdp_session=cdp_session,
-			)
-			if not announcement_content:
-				logger.warning(f"[{site_name}] 提取公告原文(HTML)失败: 内容为空")
-				# 失败也要尽量回到列表页并回收 tab，避免后续 focus/index 混乱
-				with contextlib.suppress(Exception):
-					await _return_to_list_after_save(browser_session, current_url=str(detail_url or ""))
-				return ActionResult(
-					extracted_content=f"提取公告原文失败: {title}",
-					error="提取公告原文失败"
-				)
-
-			# 5. 多 stage 并发提取：meta + contacts + address_detail + lots
-			meta_fields: dict = {}
-			contacts_fields: dict = {}
-			address_detail_fields: dict = {}
-			lot_fields: dict = {"lotProducts": [], "lotCandidates": []}
-
-			# 5.1 工程机械类二次筛选：需要先拿到 meta.projectName
-			if _engineering_machinery_only:
-				meta_fields = await extract_fields_from_html(
-					announcement_content,
-					site_name=site_name,
-					stage="meta",
-				)
-				meta_fields.pop("updateDate", None)
-
-				project_name = str(meta_fields.get("projectName") or "").strip()
-				if project_name:
-					decision, reason = await llm_is_engineering_machinery_project(
-						project_name,
-						title=title,
-						site_name=site_name,
-					)
-					if decision is False:
-						# 明确判定为“非工程机械类”且本次开启了工程机械筛选：视为已处理，避免后续重复消耗。
-						seen_detail_keys.add(dedup_key)
-						logger.info(
-							f"[{site_name}] ↩︎ 工程机械类筛选已跳过: {title[:40]}... "
-							f"(projectName={project_name[:60]!r})"
-							+ (f" reason={reason}" if reason else "")
-						)
-						# Skip means: do NOT save JSON, do NOT emit SSE item; but must return to list & clean tabs.
-						await _return_to_list_after_save(browser_session, current_url=str(detail_url or ""))
-						return ActionResult(
-							extracted_content="skipped_non_gongchengjixie",
-							long_term_memory=f"跳过（非工程机械类）: {title[:30]}...",
-						)
-					if decision is None:
-						logger.warning(
-							f"[{site_name}] 工程机械类判定无结果，默认保留: {title[:40]}... "
-							+ (f" reason={reason}" if reason else "")
-						)
-
-				contacts_fields, address_detail_fields, lot_fields = await asyncio.gather(
-					extract_fields_from_html(
-						announcement_content,
-						site_name=site_name,
-						stage="contacts",
-					),
-					extract_fields_from_html(
-						announcement_content,
-						site_name=site_name,
-						stage="address_detail",
-					),
-					extract_fields_from_html(
-						announcement_content,
-						site_name=site_name,
-						stage="lots",
-						product_category_table=_product_category_table,
-					),
-				)
-			else:
-				meta_fields, contacts_fields, address_detail_fields, lot_fields = await asyncio.gather(
-					extract_fields_from_html(
-						announcement_content,
-						site_name=site_name,
-						stage="meta",
-					),
-					extract_fields_from_html(
-						announcement_content,
-						site_name=site_name,
-						stage="contacts",
-					),
-					extract_fields_from_html(
-						announcement_content,
-						site_name=site_name,
-						stage="address_detail",
-					),
-					extract_fields_from_html(
-						announcement_content,
-						site_name=site_name,
-						stage="lots",
-						product_category_table=_product_category_table,
-					),
-				)
-
-			meta_fields.pop("updateDate", None)
-
-			# 兜底：确保数组字段存在
-			lot_products = lot_fields.get("lotProducts") or []
-			lot_candidates = lot_fields.get("lotCandidates") or []
-			if not isinstance(lot_products, list):
-				lot_products = []
-			if not isinstance(lot_candidates, list):
-				lot_candidates = []
-			lot_products = supplement_lot_products_from_candidates(lot_products, lot_candidates)
-			lot_products = await fill_product_categories_after_lots(
-				lot_products,
+			graph_result = await run_crawl_detail_graph(
+				browser_session=browser_session,
 				site_name=site_name,
+				output_dir=output_dir,
+				title=title,
+				date=date,
 				product_category_table=_product_category_table,
+				engineering_machinery_only=_engineering_machinery_only,
+				on_item_saved=on_item_saved,
+				locked_list_url=_locked_list_url,
+				seen_detail_keys=seen_detail_keys,
 			)
 
-			# 7. 生成唯一文件名（使用列表页日期做文件分组）
-			filename = get_unique_filename(output_dir, title, file_date)
+			detail_url = str(graph_result.get("detail_url") or "")
+			outcome_code = str(graph_result.get("outcome_code") or "")
+			action_result = dict(graph_result.get("action_result") or {})
 
-			# 组装最终返回结构（V2）
-			result_data = {
-				"version": ALGORITHM_VERSION,
-				"announcementUrl": detail_url,
-				"announcementName": title,
-				"announcementContent": announcement_content,
+			if outcome_code == "not_on_detail_page":
+				with contextlib.suppress(Exception):
+					await _tab_gc(browser_session)
+			else:
+				with contextlib.suppress(Exception):
+					await _return_to_list_after_save(browser_session, current_url=detail_url)
 
-				# LLM 字段（按 stage 合并）
-				**(meta_fields or {}),
-				**(contacts_fields or {}),
-				**(address_detail_fields or {}),
-
-				# 标段数组字段（LLM）
-				"lotProducts": lot_products,
-				"lotCandidates": lot_candidates,
-			}
-
-			# announcementDate：优先使用列表页在点击前记录的日期；列表页无有效日期时再保留详情页提取结果
-			list_announcement_date = normalize_date_ymd(date) or ("" if date is None else str(date).strip())
-			if list_announcement_date:
-				result_data["announcementDate"] = list_announcement_date
-
-			# 公告类别（13 选 1）强校验：
-			# - 不再“无法映射就兜底成招标”
-			# - 如果初次抽取不在范围内：调用 DeepSeek 做一次“类型归一化/分类”修复（最多 3 次）
-			raw_announcement_type = result_data.get("announcementType")
-			normalized_type = try_normalize_announcement_type(raw_announcement_type)
-			if not normalized_type:
-				normalized_type = await repair_announcement_type(
-					site_name=site_name,
-					announcement_title=title,
-					announcement_content=announcement_content,
-					raw_announcement_type=str(raw_announcement_type or ""),
-					max_retries=3,
-				)
-
-			if not normalized_type:
-				# 达到上限仍失败：告警 + 跳过（不落盘/不输出 SSE item），避免错误类型污染下游。
-				logger.warning(
-					f"[{site_name}] 公告类别修复失败（已达上限 3 次），已跳过: {title[:60]}... "
-					f"(raw={str(raw_announcement_type or '')!r}, url={str(detail_url or '')})"
-				)
-				# 视为“已处理”，避免本次 run 内重复消耗。
-				seen_detail_keys.add(dedup_key)
-				await _return_to_list_after_save(browser_session, current_url=str(detail_url or ""))
-				return ActionResult(
-					extracted_content="skipped_invalid_announcement_type",
-					long_term_memory=f"跳过（公告类型无法归一化）: {title[:30]}...",
-				)
-
-			result_data["announcementType"] = normalized_type
-
-			# estimatedAmount：
-			# - 与 announcementType 无关。
-			# - 仅由“中标金额/候选人报价/标的物”决定：
-			#   1) 若有中标金额：直接取中标金额（输出范围 "x~x"）
-			#      - 优先 winnerAmount
-			#      - 其次第一位中标/中标候选人报价（lotCandidates[].candidatePrices）
-			#   2) 若无中标金额但有标的物：保留 LLM 预估价（需为范围 "lo~hi"）
-			#   3) 若无中标金额且无标的物：返回 ""
-			# 本阶段：先按优先级覆盖/清空 + 正则校验；必要时在 lotProducts 提取完成后再派生 estimatedAmount。
-			await fill_estimated_amount_after_lots(
-				result_data,
-				site_name=site_name,
-				fields_path="extract_fields.yaml",
-			)
-
-			# 地址字段：不再用正则拆分；改为一次调用 LLM 从三组 AddressDetail 提取 12 个字段。
-			# 规则：
-			# - AddressDetail 为空：country="中国"，省市区为空字符串
-			# - 整体最多重试 3 次；超过上限逐字段回退原值；只影响 12 个字段，不包含 AddressDetail
-			try:
-				addr = await extract_admin_divisions_from_details(
-					buyer_address_detail=result_data.get("buyerAddressDetail", ""),
-					project_address_detail=result_data.get("projectAddressDetail", ""),
-					delivery_address_detail=result_data.get("deliveryAddressDetail", ""),
-					original_item=result_data,
-					max_retries=3,
-				)
-				result_data.update(addr)
-			except Exception as norm_err:
-				logger.warning(f"[{site_name}] 地址字段 LLM 提取失败（已跳过）: {norm_err}")
-
-			# 为单条结果生成稳定唯一标识（用于去重）
-			result_data["dataId"] = compute_data_id(result_data)
-
-			json_path = output_dir / f"{filename}.json"
-			with open(json_path, 'w', encoding='utf-8') as f:
-				json.dump(result_data, f, ensure_ascii=False, indent=2)
-
-			# 保存成功后再记入 dedup 集合：避免失败场景阻断重试
-			seen_detail_keys.add(dedup_key)
-
-			logger.info(f"[{site_name}] ✓ 元数据已保存: {json_path.name}")
-
-			# 调用回调发送 item 数据到 SSE
-			if on_item_saved:
-				try:
-					on_item_saved(result_data)
-				except Exception as cb_err:
-					logger.warning(f"[{site_name}] 回调执行失败: {cb_err}")
-
-			# 保存成功后：自动关闭详情页并回到列表页，避免标签页堆积导致后续切错/重复保存。
-			await _return_to_list_after_save(browser_session, current_url=str(detail_url or ""))
-
-			return ActionResult(
-				extracted_content=f"✓ 已保存: {filename}.json",
-				long_term_memory=f"已保存详情页正文(HTML): {title[:30]}..."
-			)
+			return ActionResult(**action_result)
 
 		except Exception as e:
 			logger.error(f"[{site_name}] 保存详情页失败: {e}")

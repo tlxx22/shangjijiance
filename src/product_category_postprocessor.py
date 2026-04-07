@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from .concrete_product_table import (
     format_concrete_product_table_for_prompt,
+    get_effective_concrete_product_terms,
     get_effective_concrete_product_terms_set,
 )
 from .deepseek_langchain import ainvoke_structured
@@ -19,6 +20,7 @@ _PRODUCT_CATEGORY_MAX_RETRIES = 1
 _PRODUCT_CATEGORY_LLM_SEMAPHORE = asyncio.Semaphore(4)
 _PRODUCT_CATEGORY_MULTI_VALUE_RE = re.compile(r"[\u3001,\uff0c;\uff1b\n\r]|(?:\s/\s)")
 _PRODUCT_CATEGORY_MULTI_VALUE_SPLIT_RE = re.compile(r"(?:\s/\s)|[\u3001,\uff0c;\uff1b\n\r]+")
+_PRODUCT_CATEGORY_WHITESPACE_RE = re.compile(r"\s+")
 
 _PRODUCT_CATEGORY_SYSTEM_PROMPT = """
 You are a strict concrete product classifier for Chinese procurement items.
@@ -29,12 +31,16 @@ Task:
 
 Hard rules:
 - Use ONLY `subjects`. Do NOT use models, title, body, lotName, lotNumber, or any other field.
+- If `subjects` exactly matches a candidate term, you MUST return that exact candidate term.
+- If an exact match exists, do NOT replace it with a broader term, related term, sibling term, parent category, or another term from the same row.
 - The final answer must be EXACTLY one candidate term from the candidate table.
 - If no candidate is meaningfully supported by `subjects`, output an empty string.
 - If several candidates seem related or similar, you MUST still choose the single most suitable / closest / best-matching candidate.
 - Do NOT return an empty string just because several candidates look plausible.
+- Never mechanically choose the first term in a row just because the row looks relevant.
 - Never return a whole row, multiple candidates, a punctuation-joined list, or any explanation.
 - All candidates are peer candidates. Line breaks are only for readability and do not imply priority.
+- Example: if `subjects` is `电动单梁起重机` and that exact candidate exists, you MUST return `电动单梁起重机`, not `门式回转起重机` or another nearby crane term.
 - Return ONLY valid JSON matching schema: {"productCategory": "..."}.
 """.strip()
 
@@ -52,6 +58,28 @@ def _truncate_for_log(text: str, max_chars: int = 80) -> str:
 
 def _looks_like_multi_value_output(value: str) -> bool:
 	return bool(_PRODUCT_CATEGORY_MULTI_VALUE_RE.search((value or "").strip()))
+
+
+def _normalize_exact_match_text(value: str) -> str:
+	return _PRODUCT_CATEGORY_WHITESPACE_RE.sub(" ", (value or "").strip())
+
+
+def _find_exact_product_category_match(
+	subjects: str,
+	*,
+	candidate_terms: list[str],
+) -> str:
+	normalized_subjects = _normalize_exact_match_text(subjects)
+	if not normalized_subjects:
+		return ""
+
+	for term in candidate_terms:
+		candidate = (term or "").strip()
+		if not candidate:
+			continue
+		if _normalize_exact_match_text(candidate) == normalized_subjects:
+			return candidate
+	return ""
 
 
 def _extract_candidates_from_previous_multi_value(
@@ -116,7 +144,9 @@ async def _generate_product_category_once(
 				f"\nPrevious invalid output: {previous_value!r}\n"
 				"Failure reason: multi_value (you returned multiple candidates).\n"
 				"Correct it by choosing exactly ONE most suitable candidate.\n"
+				"If `subjects` exactly matches one candidate term, return that exact term.\n"
 				"Do NOT return multiple candidates.\n"
+				"Do NOT mechanically choose the first term from a relevant row.\n"
 				"Do NOT return an empty string just because several candidates look similar.\n"
 				"Compare them and pick the single best match for `subjects`.\n"
 			)
@@ -131,6 +161,7 @@ async def _generate_product_category_once(
 			user_prompt += (
 				f"\nPrevious invalid output: {previous_value!r}\n"
 				f"Failure reason: {previous_reason}\n"
+				"If `subjects` exactly matches one candidate term, return that exact term.\n"
 				"Correct the answer. Return exactly one candidate term or an empty string.\n"
 			)
 
@@ -157,7 +188,8 @@ async def fill_product_categories_after_lots(
 		return rows
 
 	max_retries = max(1, int(max_retries))
-	candidate_terms = get_effective_concrete_product_terms_set(product_category_table)
+	candidate_terms_ordered = get_effective_concrete_product_terms(product_category_table)
+	candidate_terms = set(candidate_terms_ordered) or get_effective_concrete_product_terms_set(product_category_table)
 	prompt_table = format_concrete_product_table_for_prompt(product_category_table)
 	processed: list[dict[str, Any]] = []
 
@@ -167,6 +199,20 @@ async def fill_product_categories_after_lots(
 			continue
 
 		subjects = (row.get("subjects") or "").strip()
+		exact_match = _find_exact_product_category_match(
+			subjects,
+			candidate_terms=candidate_terms_ordered,
+		)
+		if exact_match:
+			new_row = dict(row)
+			new_row["productCategory"] = exact_match
+			logger.info(
+				f"[{site_name}] lotProducts[{index}] productCategory exact-match "
+				f"subjects={_truncate_for_log(subjects)!r} output={exact_match!r}"
+			)
+			processed.append(new_row)
+			continue
+
 		last_value = ""
 		last_reason = "not_attempted"
 
