@@ -11,6 +11,7 @@ from .address_normalizer import extract_admin_divisions_from_details
 from .algorithm_version import ALGORITHM_VERSION
 from .announcement_type_repair import repair_announcement_type
 from .custom_tools import (
+	_INPUT_TRUNCATED_META_KEY,
 	_wait_for_detail_content_ready,
 	click_show_full_info,
 	compute_data_id,
@@ -50,9 +51,13 @@ class CrawlDetailGraphState(TypedDict, total=False):
 	announcement_content: str
 
 	meta_fields: dict[str, Any]
+	meta_input_truncated: bool
 	contacts_fields: dict[str, Any]
+	contacts_input_truncated: bool
 	address_detail_fields: dict[str, Any]
+	address_detail_input_truncated: bool
 	lots_fields: dict[str, Any]
+	lots_input_truncated: bool
 	lot_products: list[dict[str, Any]]
 	lot_candidates: list[dict[str, Any]]
 
@@ -225,8 +230,12 @@ async def _extract_meta(state: CrawlDetailGraphState) -> CrawlDetailGraphState:
 		site_name=state["site_name"],
 		stage="meta",
 	)
+	was_truncated = bool(meta_fields.pop(_INPUT_TRUNCATED_META_KEY, False))
 	meta_fields.pop("updateDate", None)
-	return {"meta_fields": meta_fields}
+	return {
+		"meta_fields": meta_fields,
+		"meta_input_truncated": was_truncated,
+	}
 
 
 def _route_after_extract_content(state: CrawlDetailGraphState):
@@ -284,37 +293,46 @@ def _route_after_check_engineering_scope(state: CrawlDetailGraphState):
 async def _extract_contacts(state: CrawlDetailGraphState) -> CrawlDetailGraphState:
 	if _should_stop(state):
 		return {}
+	contacts_fields = await extract_fields_from_html(
+		state.get("announcement_content", ""),
+		site_name=state["site_name"],
+		stage="contacts",
+	)
+	was_truncated = bool(contacts_fields.pop(_INPUT_TRUNCATED_META_KEY, False))
 	return {
-		"contacts_fields": await extract_fields_from_html(
-			state.get("announcement_content", ""),
-			site_name=state["site_name"],
-			stage="contacts",
-		)
+		"contacts_fields": contacts_fields,
+		"contacts_input_truncated": was_truncated,
 	}
 
 
 async def _extract_address_detail(state: CrawlDetailGraphState) -> CrawlDetailGraphState:
 	if _should_stop(state):
 		return {}
+	address_detail_fields = await extract_fields_from_html(
+		state.get("announcement_content", ""),
+		site_name=state["site_name"],
+		stage="address_detail",
+	)
+	was_truncated = bool(address_detail_fields.pop(_INPUT_TRUNCATED_META_KEY, False))
 	return {
-		"address_detail_fields": await extract_fields_from_html(
-			state.get("announcement_content", ""),
-			site_name=state["site_name"],
-			stage="address_detail",
-		)
+		"address_detail_fields": address_detail_fields,
+		"address_detail_input_truncated": was_truncated,
 	}
 
 
 async def _extract_lots(state: CrawlDetailGraphState) -> CrawlDetailGraphState:
 	if _should_stop(state):
 		return {}
+	lots_fields = await extract_fields_from_html(
+		state.get("announcement_content", ""),
+		site_name=state["site_name"],
+		stage="lots",
+		product_category_table=state.get("product_category_table"),
+	)
+	was_truncated = bool(lots_fields.pop(_INPUT_TRUNCATED_META_KEY, False))
 	return {
-		"lots_fields": await extract_fields_from_html(
-			state.get("announcement_content", ""),
-			site_name=state["site_name"],
-			stage="lots",
-			product_category_table=state.get("product_category_table"),
-		)
+		"lots_fields": lots_fields,
+		"lots_input_truncated": was_truncated,
 	}
 
 
@@ -348,6 +366,12 @@ def _merge_result_data(state: CrawlDetailGraphState) -> CrawlDetailGraphState:
 
 	result_data = {
 		"version": ALGORITHM_VERSION,
+		"inputTruncated": bool(
+			state.get("meta_input_truncated")
+			or state.get("contacts_input_truncated")
+			or state.get("address_detail_input_truncated")
+			or state.get("lots_input_truncated")
+		),
 		"announcementUrl": state.get("detail_url") or "unknown",
 		"announcementName": state["title"],
 		"announcementContent": state.get("announcement_content", ""),

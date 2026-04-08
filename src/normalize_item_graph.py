@@ -6,7 +6,11 @@ from langgraph.graph import END, START, StateGraph
 
 from .address_normalizer import extract_admin_divisions_from_details
 from .announcement_type_repair import AnnouncementTypeRepairError, repair_announcement_type
-from .custom_tools import compute_data_id
+from .custom_tools import (
+	_INPUT_TRUNCATED_META_KEY,
+	compute_data_id,
+	_prepare_normalize_item_source_json_with_cleaned_body,
+)
 from .estimated_amount_deriver import fill_estimated_amount_after_lots
 from .field_schemas import ANNOUNCEMENT_TYPES
 from .llm_transform import (
@@ -25,12 +29,18 @@ _SITE_NAME = "normalize_item"
 
 class NormalizeItemGraphState(TypedDict, total=False):
 	source_json: str
+	llm_source_json: str
 	product_category_table: str | None
 	template: dict[str, Any]
+	cleaned_announcement_content: str
 	meta_fields: dict[str, Any]
+	meta_input_truncated: bool
 	contacts_fields: dict[str, Any]
+	contacts_input_truncated: bool
 	address_detail_fields: dict[str, Any]
+	address_detail_input_truncated: bool
 	lots_fields: dict[str, Any]
+	lots_input_truncated: bool
 	merged_item: dict[str, Any]
 	item: dict[str, Any]
 	raw_announcement_type: str
@@ -39,50 +49,69 @@ class NormalizeItemGraphState(TypedDict, total=False):
 
 
 def _prepare_input(state: NormalizeItemGraphState) -> NormalizeItemGraphState:
+	source_json = (state.get("source_json") or "").strip()
+	cleaned_announcement_content, llm_source_json = _prepare_normalize_item_source_json_with_cleaned_body(
+		source_json,
+		site_name=_SITE_NAME,
+	)
 	return {
-		"source_json": (state.get("source_json") or "").strip(),
+		"source_json": source_json,
+		"llm_source_json": llm_source_json or source_json,
 		"product_category_table": state.get("product_category_table"),
 		"template": _build_full_item_template(),
+		"cleaned_announcement_content": cleaned_announcement_content,
 	}
 
 
 async def _extract_meta(state: NormalizeItemGraphState) -> NormalizeItemGraphState:
+	meta_fields = await _extract_normalize_item_fields(
+		state.get("llm_source_json", "") or state.get("source_json", ""),
+		stage="meta",
+		product_category_table=None,
+	)
+	was_truncated = bool(meta_fields.pop(_INPUT_TRUNCATED_META_KEY, False))
 	return {
-		"meta_fields": await _extract_normalize_item_fields(
-			state.get("source_json", ""),
-			stage="meta",
-			product_category_table=None,
-		)
+		"meta_fields": meta_fields,
+		"meta_input_truncated": was_truncated,
 	}
 
 
 async def _extract_contacts(state: NormalizeItemGraphState) -> NormalizeItemGraphState:
+	contacts_fields = await _extract_normalize_item_fields(
+		state.get("llm_source_json", "") or state.get("source_json", ""),
+		stage="contacts",
+		product_category_table=None,
+	)
+	was_truncated = bool(contacts_fields.pop(_INPUT_TRUNCATED_META_KEY, False))
 	return {
-		"contacts_fields": await _extract_normalize_item_fields(
-			state.get("source_json", ""),
-			stage="contacts",
-			product_category_table=None,
-		)
+		"contacts_fields": contacts_fields,
+		"contacts_input_truncated": was_truncated,
 	}
 
 
 async def _extract_address_detail(state: NormalizeItemGraphState) -> NormalizeItemGraphState:
+	address_detail_fields = await _extract_normalize_item_fields(
+		state.get("llm_source_json", "") or state.get("source_json", ""),
+		stage="address_detail",
+		product_category_table=None,
+	)
+	was_truncated = bool(address_detail_fields.pop(_INPUT_TRUNCATED_META_KEY, False))
 	return {
-		"address_detail_fields": await _extract_normalize_item_fields(
-			state.get("source_json", ""),
-			stage="address_detail",
-			product_category_table=None,
-		)
+		"address_detail_fields": address_detail_fields,
+		"address_detail_input_truncated": was_truncated,
 	}
 
 
 async def _extract_lots(state: NormalizeItemGraphState) -> NormalizeItemGraphState:
+	lots_fields = await _extract_normalize_item_fields(
+		state.get("llm_source_json", "") or state.get("source_json", ""),
+		stage="lots",
+		product_category_table=state.get("product_category_table"),
+	)
+	was_truncated = bool(lots_fields.pop(_INPUT_TRUNCATED_META_KEY, False))
 	return {
-		"lots_fields": await _extract_normalize_item_fields(
-			state.get("source_json", ""),
-			stage="lots",
-			product_category_table=state.get("product_category_table"),
-		)
+		"lots_fields": lots_fields,
+		"lots_input_truncated": was_truncated,
 	}
 
 
@@ -99,6 +128,15 @@ def _merge_fields(state: NormalizeItemGraphState) -> NormalizeItemGraphState:
 	merged.update(address_detail_fields)
 	merged["lotProducts"] = lots_fields.get("lotProducts") or []
 	merged["lotCandidates"] = lots_fields.get("lotCandidates") or []
+	merged["inputTruncated"] = bool(
+		state.get("meta_input_truncated")
+		or state.get("contacts_input_truncated")
+		or state.get("address_detail_input_truncated")
+		or state.get("lots_input_truncated")
+	)
+	cleaned_announcement_content = str(state.get("cleaned_announcement_content") or "").strip()
+	if cleaned_announcement_content:
+		merged["announcementContent"] = cleaned_announcement_content
 
 	return {
 		"merged_item": merged,

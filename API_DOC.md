@@ -115,12 +115,14 @@ data: {"type":"start","request_id":"a1b2c3d4","site_name":"安能招投标平台
 每抓取到一条详情页数据立即发送。
 
 ```json
-data: {"type":"item","request_id":"a1b2c3d4","data":{"dataId":"<sha256>","announcementUrl":"https://example.com/detail/123","announcementName":"某某项目招标公告","announcementContent":"<div>（此处为详情页正文原始 HTML，包含表格结构等）</div>","projectName":"某某项目","projectId":"CEZB250209959","announcementDate":"2026-01-19","bidOpenDate":"2026-01-26","budgetAmount":5000000.0,"winnerAmount":970000.0,"estimatedAmount":"4000000.00~6000000.00","buyerCountry":"中国","buyerProvince":"北京市","buyerCity":"北京市","buyerDistrict":"朝阳区","buyerAddressDetail":"中国北京市朝阳区XX路1号","projectCountry":"中国","projectProvince":"内蒙古自治区","projectCity":"鄂尔多斯市","projectDistrict":"","projectAddressDetail":"内蒙古自治区鄂尔多斯市XX矿区","deliveryCountry":"中国","deliveryProvince":"内蒙古自治区","deliveryCity":"鄂尔多斯市","deliveryDistrict":"","deliveryAddressDetail":"内蒙古自治区鄂尔多斯市XX煤矿","buyerName":"国能（北京）跨境电商有限公司","buyerContact":"张三","buyerPhone":"010-12345678","buyerEmail":"buyer@example.com","agency":"国家能源集团国际工程咨询有限公司","announcementType":"招标","isEquipment":true,"lotProducts":[{"lotNumber":"标段一","lotName":"三山岛金矿","subjects":"液压挖掘机","productCategory":"挖机","models":"XE490DK","unitPrices":2800000.0,"quantities":"2","quantityUnit":"台"}],"lotCandidates":[{"lotNumber":"标段一","lotName":"三山岛金矿","type":"中标候选人","candidates":"A公司","candidatePrices":970000.0}]}}
+data: {"type":"item","request_id":"a1b2c3d4","data":{"dataId":"<sha256>","inputTruncated":false,"announcementUrl":"https://example.com/detail/123","announcementName":"某某项目招标公告","announcementContent":"<div>（此处为详情页正文原始 HTML，包含表格结构等）</div>","projectName":"某某项目","projectId":"CEZB250209959","announcementDate":"2026-01-19","bidOpenDate":"2026-01-26","budgetAmount":5000000.0,"winnerAmount":970000.0,"estimatedAmount":"4000000.00~6000000.00","buyerCountry":"中国","buyerProvince":"北京市","buyerCity":"北京市","buyerDistrict":"朝阳区","buyerAddressDetail":"中国北京市朝阳区XX路1号","projectCountry":"中国","projectProvince":"内蒙古自治区","projectCity":"鄂尔多斯市","projectDistrict":"","projectAddressDetail":"内蒙古自治区鄂尔多斯市XX矿区","deliveryCountry":"中国","deliveryProvince":"内蒙古自治区","deliveryCity":"鄂尔多斯市","deliveryDistrict":"","deliveryAddressDetail":"内蒙古自治区鄂尔多斯市XX煤矿","buyerName":"国能（北京）跨境电商有限公司","buyerContact":"张三","buyerPhone":"010-12345678","buyerEmail":"buyer@example.com","agency":"国家能源集团国际工程咨询有限公司","announcementType":"招标","isEquipment":true,"lotProducts":[{"lotNumber":"标段一","lotName":"三山岛金矿","subjects":"液压挖掘机","productCategory":"挖机","models":"XE490DK","unitPrices":2800000.0,"quantities":"2","quantityUnit":"台"}],"lotCandidates":[{"lotNumber":"标段一","lotName":"三山岛金矿","type":"中标候选人","candidates":"A公司","candidatePrices":970000.0}]}}
 ```
 
 说明：
 - `dataId` 为单条数据的稳定唯一标识（基于字段内容计算的 SHA256），可用于同站点去重
 - `announcementContent` 为详情页正文原始内容（HTML 字符串），不做 Markdown 转换，包含表格结构等
+- `inputTruncated` 为运行时观测字段；只要任一抽取 stage 因统一输入上限触发硬截断，即为 `true`
+- `inputTruncated` 不参与 `dataId` 计算
 - `budgetAmount` 单位为“元”；取不到填 `null`（小数位数尽量与原页面保持一致）
 - `winnerAmount` 单位为“元”；取不到填 `null`（小数位数尽量与原页面保持一致）
 - `lotCandidates[].candidatePrices` 单位为“元”；类型为 number；取不到/不合法填 `null`
@@ -357,6 +359,7 @@ curl -X POST http://localhost:8000/embedding \
 {
   "data": {
     "dataId": "....",
+    "inputTruncated": false,
     "announcementUrl": "",
     "announcementName": "",
     "announcementContent": "",

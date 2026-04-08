@@ -62,6 +62,7 @@ def _build_full_item_template() -> dict[str, Any]:
 	out: dict[str, Any] = {
 		"dataId": "",
 		"version": ALGORITHM_VERSION,
+		"inputTruncated": False,
 		"announcementUrl": "",
 		"announcementName": "",
 		"announcementContent": "",
@@ -94,6 +95,7 @@ def _normalize_item_to_crawler_schema(raw_item: dict[str, Any]) -> dict[str, Any
 	item["announcementUrl"] = ("" if item.get("announcementUrl") is None else str(item.get("announcementUrl"))).strip()
 	item["announcementName"] = ("" if item.get("announcementName") is None else str(item.get("announcementName"))).strip()
 	item["announcementContent"] = ("" if item.get("announcementContent") is None else str(item.get("announcementContent"))).strip()
+	item["inputTruncated"] = bool(item.get("inputTruncated", False))
 
 	for field in load_extract_fields(stage=None):
 		item[field.key] = normalize_field_value(field.key, item.get(field.key), field.type)

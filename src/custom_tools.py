@@ -776,6 +776,8 @@ TYPE_DEFAULTS = {
 	"array": [],
 }
 
+_INPUT_TRUNCATED_META_KEY = "__inputTruncated__"
+
 
 def compute_data_id(payload: dict) -> str:
 	"""
@@ -785,10 +787,12 @@ def compute_data_id(payload: dict) -> str:
 	- 以 JSON 序列化后的内容为输入（sort_keys=True）计算 SHA256
 	- 会忽略自身字段 `dataId`，避免递归
 	- 会忽略算法版本字段 `version`，避免版本升级导致同一公告的 dataId 变化
+	- 会忽略运行时观测字段 `inputTruncated`，避免因是否发生截断导致同一公告的 dataId 变化
 	"""
 	data = dict(payload or {})
 	data.pop("dataId", None)
 	data.pop("version", None)
+	data.pop("inputTruncated", None)
 	raw = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 	return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -1066,6 +1070,16 @@ async def extract_fields_from_page(
 
 
 def _sanitize_html_for_extraction(html: str, *, site_name: str, max_chars: int = 200_000) -> str:
+	clean_html, _ = _sanitize_html_for_extraction_with_meta(html, site_name=site_name, max_chars=max_chars)
+	return clean_html
+
+
+def _sanitize_html_for_extraction_with_meta(
+	html: str,
+	*,
+	site_name: str,
+	max_chars: int = 200_000,
+) -> tuple[str, bool]:
 	"""
 	Lightweight, non-LLM HTML cleanup before sending to DeepSeek for field extraction.
 
@@ -1076,14 +1090,19 @@ def _sanitize_html_for_extraction(html: str, *, site_name: str, max_chars: int =
 	"""
 	html = (html or "").strip()
 	if not html:
-		return ""
+		return "", False
+
+	was_truncated = False
 
 	try:
 		from bs4 import BeautifulSoup, Comment
 	except Exception as e:  # pragma: no cover
 		# Fallback: minimal cleanup without bs4.
 		logger.warning(f"[{site_name}] bs4 不可用，跳过 HTML 清洗: {e}")
-		return html[:max_chars] if max_chars and len(html) > max_chars else html
+		if max_chars and len(html) > max_chars:
+			was_truncated = True
+			return html[:max_chars], was_truncated
+		return html, was_truncated
 
 	soup = BeautifulSoup(html, "html.parser")
 
@@ -1189,9 +1208,10 @@ def _sanitize_html_for_extraction(html: str, *, site_name: str, max_chars: int =
 	# Hard cap to avoid extremely large prompts.
 	if max_chars and len(clean) > max_chars:
 		logger.info(f"[{site_name}] HTML 清洗后仍过长，截断到 {max_chars} 字符用于字段抽取")
+		was_truncated = True
 		clean = clean[:max_chars]
 
-	return clean.strip()
+	return clean.strip(), was_truncated
 
 
 async def extract_fields_from_html(
@@ -1216,10 +1236,10 @@ async def extract_fields_from_html(
 	if not extract_prompt or not fields:
 		return {}
 
-	html = _sanitize_html_for_extraction(html, site_name=site_name)
+	html, was_truncated = _sanitize_html_for_extraction_with_meta(html, site_name=site_name)
 	empty_result = {f.key: (True if f.key == "isEquipment" else TYPE_DEFAULTS.get(f.type, "")) for f in fields}
 	if not html:
-		return empty_result
+		return _attach_input_truncated_meta(empty_result, was_truncated)
 
 	include_estimated_amount = any(getattr(f, "key", "") == "estimatedAmount" for f in fields)
 	include_is_equipment = any(getattr(f, "key", "") == "isEquipment" for f in fields)
@@ -1348,7 +1368,7 @@ Rules:
 			)
 	except Exception as e:
 		logger.warning(f"[{site_name}] DeepSeek 字段提取调用失败（stage={stage}）: {e}")
-		return empty_result
+		return _attach_input_truncated_meta(empty_result, was_truncated)
 
 	extracted = result.model_dump() if hasattr(result, "model_dump") else {}
 	normalized: dict = {}
@@ -1358,10 +1378,112 @@ Rules:
 		normalized[f.key] = normalize_field_value(f.key, raw_value, f.type)
 
 	logger.info(f"[{site_name}] ✓ 字段提取成功（stage={stage}）")
-	return normalized
+	return _attach_input_truncated_meta(normalized, was_truncated)
 
 
 _NORMALIZE_ITEM_MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s*(.+?)\s*$")
+
+
+def _parse_normalize_item_markdown_sections(src_text: str) -> tuple[str, list[tuple[str, str, str, str]]]:
+	"""
+	Parse Markdown-like sourceJson into:
+	- preamble text before the first heading
+	- sections as (heading, heading_line, content, raw)
+	"""
+	s = (src_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+	if not s:
+		return "", []
+
+	lines = s.split("\n")
+	heading_starts: list[int] = []
+	heading_titles: list[str] = []
+	for i, ln in enumerate(lines):
+		m = _NORMALIZE_ITEM_MD_HEADING_RE.match(ln)
+		if not m:
+			continue
+		heading_starts.append(i)
+		heading_titles.append((m.group(1) or "").strip())
+
+	if not heading_starts:
+		return s, []
+
+	preamble = "\n".join(lines[: heading_starts[0]]).strip()
+	sections: list[tuple[str, str, str, str]] = []
+	for idx, start in enumerate(heading_starts):
+		end = heading_starts[idx + 1] if idx + 1 < len(heading_starts) else len(lines)
+		heading = heading_titles[idx]
+		heading_line = lines[start].strip()
+		content = "\n".join(lines[start + 1 : end]).strip()
+		raw = "\n".join(lines[start:end]).strip()
+		sections.append((heading, heading_line, content, raw))
+
+	return preamble, sections
+
+
+def _looks_like_html_fragment(text: str) -> bool:
+	s = (text or "").strip()
+	if not s:
+		return False
+	return bool(re.search(r"</?[A-Za-z][^>]*>", s))
+
+
+def _prepare_normalize_item_source_json_with_cleaned_body(
+	src_text: str,
+	*,
+	site_name: str,
+) -> tuple[str, str]:
+	"""
+	从固定命名的“### 正文”小节中直接取正文，并在保留整体 sourceJson 结构的前提下，
+	把正文内容替换为清洗后的 HTML/文本，供 /normalize_item 的 LLM 抽取使用。
+
+	Returns:
+	- cleaned_body_content: 清洗后的正文内容（用于最终 announcementContent）
+	- llm_source_json: 保留所有小节、仅替换了“### 正文”内容的输入文本
+	"""
+	s = (src_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+	if not s:
+		return "", ""
+
+	preamble, sections = _parse_normalize_item_markdown_sections(s)
+	if not sections:
+		return "", s
+
+	cleaned_body_content = ""
+	body_replaced = False
+	rebuilt_parts: list[str] = []
+	if preamble:
+		rebuilt_parts.append(preamble)
+
+	for heading, heading_line, content, raw in sections:
+		if heading == "正文" and not body_replaced:
+			body_replaced = True
+			body_content = (content or "").strip()
+			cleaned_body_content = body_content
+			if _looks_like_html_fragment(body_content):
+				cleaned = _html_to_clean_content_html(
+					body_content,
+					site_name=site_name,
+					flatten_table_cells=True,
+				).strip()
+				if cleaned:
+					cleaned_body_content = cleaned
+			if cleaned_body_content:
+				rebuilt_parts.append(f"{heading_line}\n\n{cleaned_body_content}")
+			else:
+				rebuilt_parts.append(heading_line)
+			continue
+		rebuilt_parts.append(raw)
+
+	if not body_replaced:
+		return "", s
+
+	return cleaned_body_content, "\n\n".join(part for part in rebuilt_parts if part).strip()
+
+
+def _attach_input_truncated_meta(payload: dict[str, Any], was_truncated: bool) -> dict[str, Any]:
+	out = dict(payload or {})
+	out[_INPUT_TRUNCATED_META_KEY] = bool(was_truncated)
+	return out
 
 
 def _split_normalize_item_primary_secondary_text(src_text: str) -> tuple[str, str]:
@@ -1377,27 +1499,11 @@ def _split_normalize_item_primary_secondary_text(src_text: str) -> tuple[str, st
 	if not s:
 		return "", ""
 
-	lines = s.split("\n")
-	heading_starts: list[int] = []
-	heading_titles: list[str] = []
-	for i, ln in enumerate(lines):
-		m = _NORMALIZE_ITEM_MD_HEADING_RE.match(ln)
-		if not m:
-			continue
-		heading_starts.append(i)
-		heading_titles.append((m.group(1) or "").strip())
-
-	if not heading_starts:
+	preamble, parsed_sections = _parse_normalize_item_markdown_sections(s)
+	if not parsed_sections:
 		return s, ""
 
-	# Build sections [start, end)
-	sections: list[tuple[str, str, str]] = []
-	for idx, start in enumerate(heading_starts):
-		end = heading_starts[idx + 1] if idx + 1 < len(heading_starts) else len(lines)
-		heading = heading_titles[idx]
-		content = "\n".join(lines[start + 1 : end]).strip()
-		raw = "\n".join(lines[start:end]).strip()
-		sections.append((heading, content, raw))
+	sections = [(heading, content, raw) for heading, _heading_line, content, raw in parsed_sections]
 
 	title_idx: int | None = None
 	body_idx: int | None = None
@@ -1426,9 +1532,8 @@ def _split_normalize_item_primary_secondary_text(src_text: str) -> tuple[str, st
 		return s, ""
 
 	secondary_parts: list[str] = []
-	pre = "\n".join(lines[: heading_starts[0]]).strip()
-	if pre:
-		secondary_parts.append(pre)
+	if preamble:
+		secondary_parts.append(preamble)
 
 	for i, (_heading, _content, raw) in enumerate(sections):
 		if i == title_idx or i == body_idx:
@@ -1469,12 +1574,14 @@ async def extract_fields_from_text(
 	empty_result = {f.key: (True if f.key == "isEquipment" else TYPE_DEFAULTS.get(f.type, "")) for f in fields}
 	text = (text or "").strip()
 	if not text:
-		return empty_result
+		return _attach_input_truncated_meta(empty_result, False)
 
 	# Hard cap to avoid extremely large prompts.
 	max_chars = 200_000
+	was_truncated = False
 	if len(text) > max_chars:
 		logger.info(f"[{site_name}] TEXT 过长，截断到 {max_chars} 字符用于字段抽取（stage={stage}）")
+		was_truncated = True
 		text = text[:max_chars]
 
 	include_estimated_amount = any(getattr(f, "key", "") == "estimatedAmount" for f in fields)
@@ -1617,7 +1724,7 @@ Rules:
 			)
 	except Exception as e:
 		logger.warning(f"[{site_name}] DeepSeek 字段提取调用失败（stage={stage}）: {e}")
-		return empty_result
+		return _attach_input_truncated_meta(empty_result, was_truncated)
 
 	extracted = result.model_dump() if hasattr(result, "model_dump") else {}
 	normalized: dict = {}
@@ -1627,7 +1734,7 @@ Rules:
 		normalized[f.key] = normalize_field_value(f.key, raw_value, f.type)
 
 	logger.info(f"[{site_name}] ✓ 字段提取成功（stage={stage}）")
-	return normalized
+	return _attach_input_truncated_meta(normalized, was_truncated)
 
 
 _ENGINEERING_MACHINERY_CLASSIFY_SYSTEM_PROMPT = """
@@ -1970,7 +2077,12 @@ def _html_to_clean_markdown(html: str, site_name: str) -> str:
 	return md
 
 
-def _html_to_clean_content_html(html: str, site_name: str) -> str:
+def _html_to_clean_content_html(
+	html: str,
+	site_name: str,
+	*,
+	flatten_table_cells: bool = False,
+) -> str:
 	"""
 	Keep the original content (HTML) but aggressively remove non-content chrome.
 
@@ -2073,7 +2185,10 @@ def _html_to_clean_content_html(html: str, site_name: str) -> str:
 		iframe.replace_with(p)
 
 	# Unwrap token-heavy inline tags; keep their text/content.
-	for tag_name in ("span", "font"):
+	tag_names_to_unwrap = ["span", "font"]
+	if flatten_table_cells:
+		tag_names_to_unwrap.extend(["td", "th"])
+	for tag_name in tag_names_to_unwrap:
 		for el in soup.find_all(tag_name):
 			el.unwrap()
 
