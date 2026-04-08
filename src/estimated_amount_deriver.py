@@ -6,7 +6,9 @@ from typing import Any, Awaitable, Callable, MutableMapping
 
 from .estimated_amount_policy import (
     apply_estimated_amount_policy,
+    build_effective_lot_products_for_estimation,
     is_estimated_amount_range_format,
+    pick_estimated_amount_budget_clue,
     pick_estimated_amount_priority_clue,
 )
 from .extract_client import chat_completion
@@ -82,6 +84,7 @@ def build_estimated_amount_source_text(
     lot_products: list[dict],
     announcement_content: str,
     priority_amount: Any = None,
+    budget_amount: Any = None,
     current_estimated_amount: Any = None,
     previous_invalid_output: str = "",
     excerpt_len: int = 12000,
@@ -92,6 +95,8 @@ def build_estimated_amount_source_text(
     clue_payload: dict[str, Any] = {}
     if _text_or_empty(priority_amount):
         clue_payload["priorityAmountClue"] = priority_amount
+    if _text_or_empty(budget_amount):
+        clue_payload["budgetAmountClue"] = budget_amount
     if _text_or_empty(current_estimated_amount):
         clue_payload["currentEstimatedAmount"] = _text_or_empty(current_estimated_amount)
 
@@ -157,9 +162,20 @@ async def fill_estimated_amount_after_lots(
     if is_estimated_amount_range_format(current_output):
         return
 
-    lot_products = [entry for entry in (item.get("lotProducts") or []) if isinstance(entry, dict)]
+    raw_lot_products = [entry for entry in (item.get("lotProducts") or []) if isinstance(entry, dict)]
+    lot_products = build_effective_lot_products_for_estimation(raw_lot_products)
     priority_amount = pick_estimated_amount_priority_clue(item)
-    if priority_amount is None and not lot_products:
+    budget_amount = pick_estimated_amount_budget_clue(item)
+
+    filtered_count = max(0, len(raw_lot_products) - len(lot_products))
+    if filtered_count:
+        logger.info(
+            f"[{site_name}] estimatedAmount lot filter: raw={len(raw_lot_products)} effective={len(lot_products)} "
+            f"filtered={filtered_count} reason=subjects-only lot excluded from estimation"
+        )
+
+    if priority_amount is None and budget_amount is None and not lot_products:
+        item["estimatedAmount"] = ""
         return
 
     if extractor is None:
@@ -175,6 +191,7 @@ async def fill_estimated_amount_after_lots(
                 lot_products=lot_products,
                 announcement_content=str(item.get("announcementContent") or ""),
                 priority_amount=priority_amount,
+                budget_amount=budget_amount,
                 current_estimated_amount=original_output,
                 previous_invalid_output=previous_invalid_output if attempt > 1 else "",
             )

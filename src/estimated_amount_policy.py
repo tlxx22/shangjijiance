@@ -14,6 +14,14 @@ def _has_non_empty_value(value: Any) -> bool:
     return str(value).strip() != ""
 
 
+def _is_empty_quantity_for_estimation(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (int, float)) and value == 0:
+        return True
+    return str(value).strip() in {"", "0"}
+
+
 def compact_estimated_amount_text(value: Any) -> str:
     if value is None:
         return ""
@@ -64,6 +72,31 @@ def pick_estimated_amount_priority_clue(item: MutableMapping[str, Any]) -> Any:
     return _pick_candidate_amount(item.get("lotCandidates") or [])
 
 
+def pick_estimated_amount_budget_clue(item: MutableMapping[str, Any]) -> Any:
+    budget_amount = item.get("budgetAmount")
+    if _has_non_empty_value(budget_amount):
+        return budget_amount
+    return None
+
+
+def is_effective_lot_for_estimation(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+
+    subjects = entry.get("subjects")
+    quantities = entry.get("quantities")
+    models = entry.get("models")
+
+    if _has_non_empty_value(subjects) and _is_empty_quantity_for_estimation(quantities) and not _has_non_empty_value(models):
+        return False
+    return True
+
+
+def build_effective_lot_products_for_estimation(lot_products: Any) -> list[dict[str, Any]]:
+    rows = list(lot_products or []) if isinstance(lot_products, list) else []
+    return [entry for entry in rows if is_effective_lot_for_estimation(entry)]
+
+
 def apply_estimated_amount_policy(item: MutableMapping[str, Any]) -> None:
     """
     Lightweight guard for estimatedAmount.
@@ -74,7 +107,9 @@ def apply_estimated_amount_policy(item: MutableMapping[str, Any]) -> None:
     try:
         if pick_estimated_amount_priority_clue(item) is not None:
             return
-        if item.get("lotProducts") or str(item.get("estimatedAmount") or "").strip():
+        if pick_estimated_amount_budget_clue(item) is not None:
+            return
+        if build_effective_lot_products_for_estimation(item.get("lotProducts") or []):
             return
         item["estimatedAmount"] = ""
     except Exception:
