@@ -37,6 +37,12 @@ Hard rules:
 - If no candidate is meaningfully supported by `subjects`, output an empty string.
 - If several candidates seem related or similar, you MUST still choose the single most suitable / closest / best-matching candidate.
 - Do NOT return an empty string just because several candidates look plausible.
+- 优先保持主类一致，再比较修饰词。 First keep the main product class consistent, then compare subtype modifiers.
+- If `subjects` clearly contains a main class term (for example 消防车 / 履带起重机 / 叉车 / 挖掘机), prefer candidates that keep that same main class first.
+- Do NOT jump to another main class just because one modifier word overlaps more strongly.
+- If `subjects` is clearly NOT a whole machine / complete equipment target, prefer empty string rather than forcing a machine category.
+- Non-whole-machine examples include but are not limited to 系统、配件、备件、零件、组件、附件、脚踏板、踏板、护栏、支架、底座、仪表、控制器、模块、总成、管路、电缆、接头、阀、泵头、滤芯、修理包.
+- When `subjects` names a part, accessory, attachment, module, or system of a machine rather than the machine itself, do NOT map it to a whole-machine category.
 - Never mechanically choose the first term in a row just because the row looks relevant.
 - Never return a whole row, multiple candidates, a punctuation-joined list, or any explanation.
 - All candidates are peer candidates. Line breaks are only for readability and do not imply priority.

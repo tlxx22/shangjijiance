@@ -206,6 +206,8 @@ def generate_extract_prompt(
 		)
 		lines.append("- productCategory：只允许根据 subjects 本身与“具体产品表”匹配，直接填写表中与 subjects 语义最贴近、最具体的那个候选项本身。表中所有词都是平级候选项，换行仅为阅读方便，不表示首词优先；匹配不到填 \"\"")
 		lines.append("- 严禁使用 models/型号/规格/配套说明/适用对象/用途说明 去推断 productCategory；尤其像“配XX设备用”“适用于XX设备”“XX安装”“XX维修”“XX运输”“XX施工服务”“XX海运费”“XX租赁”里的目标设备或服务对象，都不是本次采购标的的 productCategory")
+		lines.append("- 先保持主类一致，再比较修饰词；若 subjects 明确属于“消防车/履带起重机/叉车/挖掘机”等主类，优先在同主类候选中比较，不要因为某个修饰词重合更强就跳到别的主类")
+		lines.append("- 若 subjects 明显不是整机/完整设备，而是“系统、配件、备件、零件、组件、附件、脚踏板、踏板、护栏、支架、底座、仪表、控制器、模块、总成、管路、电缆、接头、阀、泵头、滤芯、修理包”等非整机对象，则 productCategory 必须返回 \"\"，不要强行映射到整机品类")
 		lines.append("- 如果 subjects 是‘阀芯组件/滤芯/密封件/配件/备件/组件’这类部件或通用物料词，且仅靠 subjects 本身无法在具体产品表中稳定匹配到明确品类，则 productCategory 必须返回 \"\"，不要因为 models 里出现了‘液压支架/采煤机/搅拌站/装载机’就回填这些设备品类")
 		lines.append("- 示例：subjects=阀芯组件，models=配ZY15000/30/65D型掩护式液压支架用 => productCategory 必须是 \"\"")
 		lines.append("- 示例：subjects=反冲洗滤芯，models=配ZY13000/24/50D型支撑掩护式液压支架用 => productCategory 必须是 \"\"")
