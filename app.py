@@ -590,6 +590,7 @@ async def normalize_item(http_request: Request):
             payload = {"sourceJson": text_fallback}
 
         req = NormalizeItemRequest.model_validate(payload)
+        logger.info(f"/normalize_item sourceJson received:\n{req.sourceJson}")
         item = await normalize_source_json_to_item(
             req.sourceJson,
             product_category_table=req.productCategoryTable,
