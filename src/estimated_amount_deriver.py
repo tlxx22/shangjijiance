@@ -171,7 +171,7 @@ async def fill_estimated_amount_after_lots(
     if filtered_count:
         logger.info(
             f"[{site_name}] estimatedAmount lot filter: raw={len(raw_lot_products)} effective={len(lot_products)} "
-            f"filtered={filtered_count} reason=subjects-only lot excluded from estimation"
+            f"filtered={filtered_count} reason=lot missing quantity or model excluded from estimation"
         )
 
     if priority_amount is None and budget_amount is None and not lot_products:

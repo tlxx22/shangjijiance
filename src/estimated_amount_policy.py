@@ -87,7 +87,9 @@ def is_effective_lot_for_estimation(entry: Any) -> bool:
     quantities = entry.get("quantities")
     models = entry.get("models")
 
-    if _has_non_empty_value(subjects) and _is_empty_quantity_for_estimation(quantities) and not _has_non_empty_value(models):
+    if _has_non_empty_value(subjects) and (
+        _is_empty_quantity_for_estimation(quantities) or not _has_non_empty_value(models)
+    ):
         return False
     return True
 
