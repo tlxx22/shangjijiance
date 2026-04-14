@@ -1069,7 +1069,7 @@ async def extract_fields_from_page(
 		return empty_result
 
 
-def _sanitize_html_for_extraction(html: str, *, site_name: str, max_chars: int = 200_000) -> str:
+def _sanitize_html_for_extraction(html: str, *, site_name: str, max_chars: int = 50_000) -> str:
 	clean_html, _ = _sanitize_html_for_extraction_with_meta(html, site_name=site_name, max_chars=max_chars)
 	return clean_html
 
@@ -1078,7 +1078,7 @@ def _sanitize_html_for_extraction_with_meta(
 	html: str,
 	*,
 	site_name: str,
-	max_chars: int = 200_000,
+	max_chars: int = 50_000,
 ) -> tuple[str, bool]:
 	"""
 	Lightweight, non-LLM HTML cleanup before sending to DeepSeek for field extraction.
@@ -1415,6 +1415,71 @@ def _parse_normalize_item_markdown_sections(src_text: str) -> tuple[str, list[tu
 	return preamble, sections
 
 
+def _extract_normalize_item_title_section(src_text: str) -> str:
+	"""
+	从 /normalize_item 的 Markdown 输入中直接提取“标题”小节内容。
+	优先精确匹配“标题”，其次回退到包含“标题”且不包含“正文”的 heading。
+	"""
+	_preamble, sections = _parse_normalize_item_markdown_sections(src_text)
+	if not sections:
+		return ""
+
+	for heading, _heading_line, content, _raw in sections:
+		if heading == "标题":
+			return (content or "").strip()
+
+	for heading, _heading_line, content, _raw in sections:
+		if "标题" in heading and "正文" not in heading:
+			return (content or "").strip()
+
+	return ""
+
+
+class _ProjectNameFromTitleSelection(BaseModel):
+	projectName: str = ""
+
+
+async def extract_project_name_from_title_text(title: str, *, site_name: str) -> str:
+	"""
+	仅基于公告标题抽取 projectName。无法明确识别时返回空字符串。
+	"""
+	title_text = (title or "").strip()
+	if not title_text:
+		return ""
+
+	system_prompt = """
+You are an extractor for Chinese tender/project titles.
+Given ONLY an announcement title, extract the projectName.
+
+Rules:
+- Use ONLY the title. Do NOT use body or any other field.
+- Prefer the core project subject name from the title.
+- If the title contains organization lead-ins like “XX单位关于”, drop the lead-in and keep the project subject after it.
+- If the title also contains notice-type suffixes such as 招标公告 / 竞价公告 / 采购公告 / 竞争性谈判公告 / 结果公告 / 更正公告 / 变更公告 / 澄清公告, remove those suffixes from projectName.
+- If the title also contains project codes, batch numbers, sequence numbers, or bracketed notice identifiers that are not part of the project subject, do not let them dominate the extraction.
+- Keep genuine project wording such as（二次招标）when it is clearly part of the project subject itself.
+- If the title does not clearly contain a project subject, output an empty string.
+- Return ONLY valid JSON matching schema: {"projectName": "..."}.
+""".strip()
+
+	user_prompt = f"title:\n{title_text}"
+
+	try:
+		async with _EXTRACT_FIELDS_LLM_SEMAPHORE:
+			result = await ainvoke_structured(
+				[
+					{"role": "system", "content": system_prompt},
+					{"role": "user", "content": user_prompt},
+				],
+				_ProjectNameFromTitleSelection,
+			)
+	except Exception as e:
+		logger.warning(f"[{site_name}] 标题项目名称抽取失败: {e}")
+		return ""
+
+	return str(result.projectName or "").strip()
+
+
 def _looks_like_html_fragment(text: str) -> bool:
 	s = (text or "").strip()
 	if not s:
@@ -1572,7 +1637,7 @@ async def extract_fields_from_text(
 		return _attach_input_truncated_meta(empty_result, False)
 
 	# Hard cap to avoid extremely large prompts.
-	max_chars = 200_000
+	max_chars = 50_000
 	was_truncated = False
 	if len(text) > max_chars:
 		logger.info(f"[{site_name}] TEXT 过长，截断到 {max_chars} 字符用于字段抽取（stage={stage}）")

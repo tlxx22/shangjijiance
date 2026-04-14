@@ -9,6 +9,8 @@ from .announcement_type_repair import AnnouncementTypeRepairError, repair_announ
 from .custom_tools import (
 	_INPUT_TRUNCATED_META_KEY,
 	compute_data_id,
+	extract_project_name_from_title_text,
+	_extract_normalize_item_title_section,
 	_prepare_normalize_item_source_json_with_cleaned_body,
 )
 from .estimated_amount_deriver import fill_estimated_amount_after_lots
@@ -32,7 +34,9 @@ class NormalizeItemGraphState(TypedDict, total=False):
 	llm_source_json: str
 	product_category_table: str | None
 	template: dict[str, Any]
+	direct_announcement_name: str
 	cleaned_announcement_content: str
+	title_project_name: str
 	meta_fields: dict[str, Any]
 	meta_input_truncated: bool
 	contacts_fields: dict[str, Any]
@@ -50,6 +54,7 @@ class NormalizeItemGraphState(TypedDict, total=False):
 
 def _prepare_input(state: NormalizeItemGraphState) -> NormalizeItemGraphState:
 	source_json = (state.get("source_json") or "").strip()
+	direct_announcement_name = _extract_normalize_item_title_section(source_json)
 	cleaned_announcement_content, llm_source_json = _prepare_normalize_item_source_json_with_cleaned_body(
 		source_json,
 		site_name=_SITE_NAME,
@@ -59,7 +64,17 @@ def _prepare_input(state: NormalizeItemGraphState) -> NormalizeItemGraphState:
 		"llm_source_json": llm_source_json or source_json,
 		"product_category_table": state.get("product_category_table"),
 		"template": _build_full_item_template(),
+		"direct_announcement_name": direct_announcement_name,
 		"cleaned_announcement_content": cleaned_announcement_content,
+	}
+
+
+async def _extract_project_name_from_title(state: NormalizeItemGraphState) -> NormalizeItemGraphState:
+	return {
+		"title_project_name": await extract_project_name_from_title_text(
+			str(state.get("direct_announcement_name") or ""),
+			site_name=_SITE_NAME,
+		)
 	}
 
 
@@ -137,6 +152,12 @@ def _merge_fields(state: NormalizeItemGraphState) -> NormalizeItemGraphState:
 	cleaned_announcement_content = str(state.get("cleaned_announcement_content") or "").strip()
 	if cleaned_announcement_content:
 		merged["announcementContent"] = cleaned_announcement_content
+	direct_announcement_name = str(state.get("direct_announcement_name") or "").strip()
+	if direct_announcement_name:
+		merged["announcementName"] = direct_announcement_name
+	title_project_name = str(state.get("title_project_name") or "").strip()
+	if title_project_name:
+		merged["projectName"] = title_project_name
 
 	return {
 		"merged_item": merged,
@@ -232,6 +253,7 @@ def _finalize_output(state: NormalizeItemGraphState) -> NormalizeItemGraphState:
 def _build_core_graph():
 	graph = StateGraph(NormalizeItemGraphState)
 	graph.add_node("prepare_input", _prepare_input)
+	graph.add_node("extract_project_name_from_title", _extract_project_name_from_title)
 	graph.add_node("extract_meta", _extract_meta)
 	graph.add_node("extract_contacts", _extract_contacts)
 	graph.add_node("extract_address_detail", _extract_address_detail)
@@ -243,10 +265,12 @@ def _build_core_graph():
 	graph.add_node("fill_estimated_amount", _fill_estimated_amount)
 
 	graph.add_edge(START, "prepare_input")
+	graph.add_edge("prepare_input", "extract_project_name_from_title")
 	graph.add_edge("prepare_input", "extract_meta")
 	graph.add_edge("prepare_input", "extract_contacts")
 	graph.add_edge("prepare_input", "extract_address_detail")
 	graph.add_edge("prepare_input", "extract_lots")
+	graph.add_edge("extract_project_name_from_title", "merge_fields")
 	graph.add_edge("extract_meta", "merge_fields")
 	graph.add_edge("extract_contacts", "merge_fields")
 	graph.add_edge("extract_address_detail", "merge_fields")
@@ -262,6 +286,7 @@ def _build_core_graph():
 def _build_full_graph():
 	graph = StateGraph(NormalizeItemGraphState)
 	graph.add_node("prepare_input", _prepare_input)
+	graph.add_node("extract_project_name_from_title", _extract_project_name_from_title)
 	graph.add_node("extract_meta", _extract_meta)
 	graph.add_node("extract_contacts", _extract_contacts)
 	graph.add_node("extract_address_detail", _extract_address_detail)
@@ -276,10 +301,12 @@ def _build_full_graph():
 	graph.add_node("finalize_output", _finalize_output)
 
 	graph.add_edge(START, "prepare_input")
+	graph.add_edge("prepare_input", "extract_project_name_from_title")
 	graph.add_edge("prepare_input", "extract_meta")
 	graph.add_edge("prepare_input", "extract_contacts")
 	graph.add_edge("prepare_input", "extract_address_detail")
 	graph.add_edge("prepare_input", "extract_lots")
+	graph.add_edge("extract_project_name_from_title", "merge_fields")
 	graph.add_edge("extract_meta", "merge_fields")
 	graph.add_edge("extract_contacts", "merge_fields")
 	graph.add_edge("extract_address_detail", "merge_fields")

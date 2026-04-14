@@ -23,12 +23,6 @@ fields:
     stage: meta
     hint: 公告标题/公告名称（从输入中语义为“标题”的内容提取；若输入为 Markdown，则输出“标题”字样的整个小节, 必须整段输出整个小节, 不可以截断；找不到填 ""）
 
-  - key: announcementContent
-    name: 公告正文
-    type: string
-    stage: meta
-    hint: 公告正文/公告详情文字内容（从输入中语义为“正文/详情”的内容提取；若输入为 Markdown，则输出“正文”字样的整个小节,必须整段输出整个小节, 不可以截断；找不到填 ""）
-
   - key: projectName
     name: 项目名称
     type: string
