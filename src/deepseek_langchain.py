@@ -16,7 +16,7 @@ DEFAULT_SILICONFLOW_EXTRACT_MODEL = "Pro/deepseek-ai/DeepSeek-V3.2"
 DEFAULT_SANY_EXTRACT_MODEL = "deepseek-v3.2"
 DEFAULT_SANY_MAX_TOKENS = 8192
 
-DEFAULT_OPENAI_EXTRACT_MODEL = "gpt-5.2"
+DEFAULT_OPENAI_EXTRACT_MODEL = "deepseek-v3-2-251201"
 
 
 def _normalize_base_url(url: str) -> str:
