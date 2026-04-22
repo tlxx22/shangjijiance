@@ -60,9 +60,18 @@ PC 钢筋部品生产成套装备,智能钢筋生产线
 """.strip()
 
 
+def _normalize_table_text(raw: str) -> str:
+    text = str(raw or "")
+    # Some snapshots are stored as a single line with literal "\n" sequences.
+    # Normalize them so parsing behaves the same as with real line breaks.
+    if "\\n" in text and text.count("\n") <= 1:
+        text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _parse_table(raw: str) -> list[list[str]]:
     rows: list[list[str]] = []
-    for line in raw.splitlines():
+    for line in _normalize_table_text(raw).splitlines():
         line = line.strip()
         if not line:
             continue
