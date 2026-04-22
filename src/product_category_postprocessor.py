@@ -21,11 +21,6 @@ _PRODUCT_CATEGORY_LLM_SEMAPHORE = asyncio.Semaphore(4)
 _PRODUCT_CATEGORY_MULTI_VALUE_RE = re.compile(r"[\u3001,\uff0c;\uff1b\n\r]|(?:\s/\s)")
 _PRODUCT_CATEGORY_MULTI_VALUE_SPLIT_RE = re.compile(r"(?:\s/\s)|[\u3001,\uff0c;\uff1b\n\r]+")
 _PRODUCT_CATEGORY_WHITESPACE_RE = re.compile(r"\s+")
-_PRODUCT_CATEGORY_BUNDLED_PAREN_RE = re.compile(r"[（(][^）)]*(?:含|带|配)[^）)]*[）)]")
-_PRODUCT_CATEGORY_BUNDLED_TAIL_RE = re.compile(
-    r"(?:及附属设备|及配套设备|及附属设施|及附件|及随机附件|及备品备件|含附件|含随机附件|含备品备件)\s*$"
-)
-_PRODUCT_CATEGORY_TRAILING_PUNCT_RE = re.compile(r"[\s,，;；、:：]+$")
 
 _PRODUCT_CATEGORY_SYSTEM_PROMPT = """
 You are a strict concrete product classifier for Chinese procurement items.
@@ -82,33 +77,6 @@ def _looks_like_multi_value_output(value: str) -> bool:
 
 def _normalize_exact_match_text(value: str) -> str:
 	return _PRODUCT_CATEGORY_WHITESPACE_RE.sub(" ", (value or "").strip())
-
-
-def _derive_main_subject_hint(subjects: str) -> str:
-	text = (subjects or "").strip()
-	if not text:
-		return ""
-
-	text = _PRODUCT_CATEGORY_BUNDLED_PAREN_RE.sub("", text)
-	text = _PRODUCT_CATEGORY_BUNDLED_TAIL_RE.sub("", text)
-	text = _PRODUCT_CATEGORY_TRAILING_PUNCT_RE.sub("", text).strip()
-	return text
-
-
-def _find_closest_candidate_hint(
-	subjects: str,
-	*,
-	candidate_terms: list[str],
-) -> str:
-	text = _normalize_exact_match_text(subjects)
-	if not text:
-		return ""
-
-	for term in sorted(candidate_terms, key=len, reverse=True):
-		candidate = _normalize_exact_match_text(term)
-		if candidate and candidate in text:
-			return term.strip()
-	return ""
 
 
 def _find_exact_product_category_match(
@@ -173,8 +141,6 @@ async def _generate_product_category_once(
 	subjects: str,
 	prompt_table: str,
 	candidate_terms: set[str],
-	main_subject_hint: str,
-	closest_candidate_hint: str,
 	attempt: int,
 	previous_value: str,
 	previous_reason: str,
@@ -183,17 +149,6 @@ async def _generate_product_category_once(
 		f"subjects:\n{subjects}\n\n"
 		f"candidate_table:\n{prompt_table}\n"
 	)
-	if main_subject_hint:
-		user_prompt += (
-			f"\nmechanical_main_subject_hint:\n{main_subject_hint}\n"
-			"This hint is derived mechanically from `subjects` by trimming bundled-scope wording only.\n"
-		)
-	if closest_candidate_hint:
-		user_prompt += (
-			f"\nmechanical_closest_candidate_hint:\n{closest_candidate_hint}\n"
-			"This hint is derived mechanically from `subjects` and the candidate table only.\n"
-			"If it is consistent with `subjects`, prefer it over returning an empty string.\n"
-		)
 	if attempt > 1:
 		if previous_reason == "multi_value":
 			previous_candidates = _extract_candidates_from_previous_multi_value(
@@ -259,11 +214,6 @@ async def fill_product_categories_after_lots(
 			continue
 
 		subjects = (row.get("subjects") or "").strip()
-		main_subject_hint = _derive_main_subject_hint(subjects)
-		closest_candidate_hint = _find_closest_candidate_hint(
-			main_subject_hint or subjects,
-			candidate_terms=candidate_terms_ordered,
-		)
 		exact_match = _find_exact_product_category_match(
 			subjects,
 			candidate_terms=candidate_terms_ordered,
@@ -287,8 +237,6 @@ async def fill_product_categories_after_lots(
 					subjects=subjects,
 					prompt_table=prompt_table,
 					candidate_terms=candidate_terms,
-					main_subject_hint=main_subject_hint,
-					closest_candidate_hint=closest_candidate_hint,
 					attempt=attempt,
 					previous_value=last_value,
 					previous_reason=last_reason,
