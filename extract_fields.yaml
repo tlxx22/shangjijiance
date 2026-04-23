@@ -115,6 +115,19 @@ fields:
       - 仅当明确为纯服务/纯工程施工/咨询审计/物业劳务等，且不涉及设备采购时，填 false。
       - 不确定时默认 true（宁可误判为 true，也不要漏掉设备采购类）。
 
+  - key: isOverseasProject
+    name: 是否海外项目
+    type: boolean
+    stage: meta
+    hint: |
+      判断该项目是否属于“海外项目”：
+      - “海外”是指项目实施地、建设地、使用地、交付地或服务履约地明确位于中国（含港澳台）以外。
+      - 若项目本身明确在中国大陆、香港、澳门或台湾，则填 false。
+      - 必须优先看项目实际落地位置；不要因为采购人、代理机构、投标人、供应商、制造商是境外主体，就直接判为 true。
+      - 仅当输入中有清晰依据表明项目实际地点在中国（含港澳台）以外时，才填 true。
+      - 若只是出现海外运输、进出口、国际标准、外币报价、国外公司名称等信息，但不能证明项目实际地点在中国（含港澳台）以外，则填 false。
+      - 不确定时填 false，不要猜。
+
   # ===== 地址字段（两步：AddressDetail 抽取 + address_admin 派生）=====
   # - stage=address_detail：只提取三组详细地址（buyer/project/deliveryAddressDetail）
   # - stage=address_admin：由系统从三组 AddressDetail 派生得到国家/省/市/区

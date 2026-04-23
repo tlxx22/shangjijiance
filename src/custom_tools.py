@@ -776,6 +776,14 @@ TYPE_DEFAULTS = {
 	"array": [],
 }
 
+_IS_OVERSEAS_PROJECT_SPECIAL_RULE = (
+	"Special rule for isOverseasProject:\n"
+	"- Here, China includes mainland China, Hong Kong, Macau, and Taiwan.\n"
+	"- Output true ONLY when the input clearly shows that the project's execution / construction / use / delivery / service location is outside China.\n"
+	"- Buyer or supplier nationality, foreign company names, foreign currency, import/export, or overseas shipping alone do NOT make the project overseas.\n"
+	"- If the actual project location cannot be determined clearly, output false. Do not guess.\n"
+)
+
 _INPUT_TRUNCATED_META_KEY = "__inputTruncated__"
 
 
@@ -1243,6 +1251,7 @@ async def extract_fields_from_html(
 
 	include_estimated_amount = any(getattr(f, "key", "") == "estimatedAmount" for f in fields)
 	include_is_equipment = any(getattr(f, "key", "") == "isEquipment" for f in fields)
+	include_is_overseas_project = any(getattr(f, "key", "") == "isOverseasProject" for f in fields)
 	include_announcement_date = any(getattr(f, "key", "") == "announcementDate" for f in fields)
 	include_project_id = any(getattr(f, "key", "") == "projectId" for f in fields)
 
@@ -1289,6 +1298,9 @@ Rules:
 				"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
 				"- If uncertain, output true.\n"
 			)
+
+	if include_is_overseas_project:
+			system_prompt += "\n\n" + _IS_OVERSEAS_PROJECT_SPECIAL_RULE
 
 	if include_announcement_date:
 			system_prompt += (
@@ -1649,6 +1661,7 @@ async def extract_fields_from_text(
 
 	include_estimated_amount = any(getattr(f, "key", "") == "estimatedAmount" for f in fields)
 	include_is_equipment = any(getattr(f, "key", "") == "isEquipment" for f in fields)
+	include_is_overseas_project = any(getattr(f, "key", "") == "isOverseasProject" for f in fields)
 	include_announcement_date = any(getattr(f, "key", "") == "announcementDate" for f in fields)
 
 	primary_text, secondary_text = ("", "")
@@ -1700,6 +1713,9 @@ Rules:
 				"- Output false ONLY when it is clearly NOT an equipment procurement.\n"
 				"- If uncertain, output true.\n"
 			)
+
+	if include_is_overseas_project:
+			system_prompt += "\n\n" + _IS_OVERSEAS_PROJECT_SPECIAL_RULE
 
 	if site_name == "normalize_item" and primary_text:
 		system_prompt += (
