@@ -1,14 +1,11 @@
 """
-Test-only LLM routing override.
+LLM routing switch.
 
-Goal (as requested):
-- Keep "official" behavior unchanged (browser-use cloud via ChatBrowserUse).
-- When ROUTE="sany", DO NOT use SANY gateway for browser-use navigation; instead call
-  browser-use cloud "bu-latest" with a hard-coded API key.
-- DeepSeek extraction remains routed by `trans.ROUTE` in `src/extract_client.py`.
-  So setting ROUTE="sany" here keeps extraction on SANY gateway while navigation uses cloud.
-
-WARNING: This file contains a plaintext API key. Do not commit it to a shared repo.
+Runtime route is controlled by env var TRANS_ROUTE:
+- "openai": Yaowu/default environment. Browser navigation uses browser-use cloud;
+  extraction uses OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL via src.extract_client.
+- "sany": SANY cloud desktop. Browser navigation and extraction use SANY AI Gateway.
+- "official": legacy route. Browser navigation uses browser-use cloud; extraction uses SiliconFlow.
 """
 
 from __future__ import annotations
@@ -20,49 +17,69 @@ from browser_use.llm.base import BaseChatModel
 from browser_use.llm.browser_use import ChatBrowserUse
 from browser_use.llm.openai.chat import ChatOpenAI
 
-# ======= Switch here =======
-# - "official": browser-use cloud (original)
-# - "sany": browser-use cloud for navigation, SANY gateway for DeepSeek extraction (via trans.ROUTE)
-# - "openai": browser-use cloud for navigation, OpenAI-compatible endpoint for extraction (via src/extract_client.py)
-#
-# Runtime override:
-# - Set env var TRANS_ROUTE to one of: official / sany / openai
+Route = Literal["official", "sany", "openai"]
+
+# ======= Runtime switch =======
+# Operations should set TRANS_ROUTE explicitly:
+# - Yaowu server: TRANS_ROUTE=openai
+# - SANY cloud desktop: TRANS_ROUTE=sany
+_VALID_ROUTES = {"official", "sany", "openai"}
 _route_env = (os.getenv("TRANS_ROUTE") or "").strip().lower()
-if _route_env in {"official", "sany", "openai"}:
-	ROUTE: Literal["official", "sany", "openai"] = cast(Literal["official", "sany", "openai"], _route_env)
+if _route_env in _VALID_ROUTES:
+	ROUTE: Route = cast(Route, _route_env)
 else:
-	ROUTE: Literal["official", "sany", "openai"] = "openai"
+	ROUTE: Route = "openai"
 
-# Navigation model (browser-use).
+# Model names are intentionally stable defaults. Extraction model overrides are
+# handled in src.extract_client / src.deepseek_langchain, not here.
 OFFICIAL_MODEL_NAME = "bu-2-0"
+SANY_MODEL_NAME = "bu-2-0"
 
-# Hard-coded API key for browser-use cloud when ROUTE="sany" (test only).
-_BROWSER_USE_CLOUD_KEY_FOR_SANY = "bu_Ga_1Citdb1Gm7MrHKK8aYLMVCJWBFlhEKJIq5YqXwB8"
+
+def _get_sany_headers() -> dict[str, str] | None:
+	# Optional: force gateway vendor routing (header X-ai-server).
+	x_ai_server = os.getenv("SANY_X_AI_SERVER") or os.getenv("SANY_AI_SERVER")
+	if not x_ai_server:
+		return None
+	return {"X-ai-server": x_ai_server}
+
+
+def _build_browser_use_cloud_llm() -> BaseChatModel:
+	return ChatBrowserUse(
+		model=OFFICIAL_MODEL_NAME,
+		api_key=os.getenv("BROWSER_USE_API_KEY"),
+		base_url=os.getenv("BROWSER_USE_LLM_URL"),
+	)
+
+
+def _build_sany_gateway_llm() -> BaseChatModel:
+	api_key = os.getenv("SANY_AI_GATEWAY_KEY") or os.getenv("SANY_AI_GATEWAY_API_KEY")
+	if not api_key:
+		raise ValueError(
+			"Missing SANY gateway api key. Set env var SANY_AI_GATEWAY_KEY "
+			"(Authorization: Bearer <key>)."
+		)
+
+	base_url = os.getenv("SANY_AI_GATEWAY_BASE_URL", "https://agent-api-test.sany.com.cn/ai-api")
+
+	# SANY gateway is OpenAI-compatible. Some compatible gateways do not support
+	# response_format(json_schema), so keep structured-output schema in prompt.
+	return ChatOpenAI(
+		model=SANY_MODEL_NAME,
+		api_key=api_key,
+		base_url=base_url,
+		default_headers=_get_sany_headers(),
+		add_schema_to_system_prompt=True,
+		dont_force_structured_output=True,
+	)
 
 
 def build_llm() -> BaseChatModel:
-	"""Build the LLM instance used by browser-use Agent (navigation/planning)."""
-	if ROUTE == "official":
-		return ChatBrowserUse(
-			model=OFFICIAL_MODEL_NAME,
-			api_key=os.getenv("BROWSER_USE_API_KEY"),
-			base_url=os.getenv("BROWSER_USE_LLM_URL"),
-		)
-
+	"""Build the LLM instance used by browser-use Agent."""
 	if ROUTE == "sany":
-		# Keep using browser-use cloud for navigation to avoid SANY-private model instability.
-		return ChatBrowserUse(
-			model=OFFICIAL_MODEL_NAME,
-			api_key=_BROWSER_USE_CLOUD_KEY_FOR_SANY,
-			base_url=os.getenv("BROWSER_USE_LLM_URL"),
-		)
+		return _build_sany_gateway_llm()
 
-	if ROUTE == "openai":
-		# Extraction uses OpenAI (see src/extract_client.py). Navigation stays on browser-use cloud.
-		return ChatBrowserUse(
-			model=OFFICIAL_MODEL_NAME,
-			api_key=os.getenv("BROWSER_USE_API_KEY"),
-			base_url=os.getenv("BROWSER_USE_LLM_URL"),
-		)
+	if ROUTE in {"official", "openai"}:
+		return _build_browser_use_cloud_llm()
 
-	raise ValueError(f"Unknown ROUTE={ROUTE!r}. Expected 'official' or 'sany' or 'openai'.")
+	raise ValueError(f"Unknown ROUTE={ROUTE!r}. Expected 'official', 'sany', or 'openai'.")
