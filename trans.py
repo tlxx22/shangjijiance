@@ -4,7 +4,9 @@ LLM routing switch.
 Runtime route is controlled by env var TRANS_ROUTE:
 - "openai": Yaowu/default environment. Browser navigation uses browser-use cloud;
   extraction uses OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL via src.extract_client.
-- "sany": SANY cloud desktop. Browser navigation and extraction use SANY AI Gateway.
+- "sany": SANY cloud desktop. Browser navigation uses SANY AI Gateway bu-2-0;
+  extraction uses SANY AI Gateway DeepSeek and may force VOLCES-ARK via
+  SANY_X_AI_SERVER / SANY_AI_SERVER in the extraction clients.
 - "official": legacy route. Browser navigation uses browser-use cloud; extraction uses SiliconFlow.
 """
 
@@ -15,7 +17,6 @@ from typing import Literal, cast
 
 from browser_use.llm.base import BaseChatModel
 from browser_use.llm.browser_use import ChatBrowserUse
-from browser_use.llm.openai.chat import ChatOpenAI
 
 Route = Literal["official", "sany", "openai"]
 
@@ -36,14 +37,6 @@ OFFICIAL_MODEL_NAME = "bu-2-0"
 SANY_MODEL_NAME = "bu-2-0"
 
 
-def _get_sany_headers() -> dict[str, str] | None:
-	# Optional: force gateway vendor routing (header X-ai-server).
-	x_ai_server = os.getenv("SANY_X_AI_SERVER") or os.getenv("SANY_AI_SERVER")
-	if not x_ai_server:
-		return None
-	return {"X-ai-server": x_ai_server}
-
-
 def _build_browser_use_cloud_llm() -> BaseChatModel:
 	return ChatBrowserUse(
 		model=OFFICIAL_MODEL_NAME,
@@ -62,15 +55,16 @@ def _build_sany_gateway_llm() -> BaseChatModel:
 
 	base_url = os.getenv("SANY_AI_GATEWAY_BASE_URL", "https://agent-api-test.sany.com.cn/ai-api")
 
-	# SANY gateway is OpenAI-compatible. Some compatible gateways do not support
-	# response_format(json_schema), so keep structured-output schema in prompt.
-	return ChatOpenAI(
+	# Keep this aligned with the SANY cloud desktop trans.py:
+	# browser-use navigation uses bu-2-0 through the SANY gateway.
+	# Do not pass X-ai-server here. DeepSeek extraction should still force
+	# VOLCES-ARK via SANY_X_AI_SERVER / SANY_AI_SERVER in src.extract_client and
+	# src.deepseek_langchain. Forcing browser-use bu-2-0 to VOLCES-ARK fails with
+	# API_MISMATCH_FILTER because VOLCES-ARK does not serve bu-2-0.
+	return ChatBrowserUse(
 		model=SANY_MODEL_NAME,
 		api_key=api_key,
 		base_url=base_url,
-		default_headers=_get_sany_headers(),
-		add_schema_to_system_prompt=True,
-		dont_force_structured_output=True,
 	)
 
 
