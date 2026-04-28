@@ -2389,7 +2389,12 @@ async def extract_page_content(
   // Try to extract the *detail content container* first.
   // Some sites render the main content inside same-origin iframes (e.g. srcdoc). In that case, prefer the iframe doc.
   // Some sites (e.g. sp.iccec.cn) have a huge navigation shell; returning full DOM makes Markdown very noisy.
-  const keywords = ['公告内容', '公告标题', '项目编号', '发布时间', '附件列表', '物资信息', '相关公告列表'];
+  const keywords = ['公告内容', '公告标题', '项目编号', '发布时间', '发布日期', '公告时间', '公告日期', '附件列表', '物资信息', '相关公告列表'];
+  const metadataLabels = [
+    '发布日期', '发布时间', '公告时间', '公告日期', '项目名称', '项目编号', '招标编号', '采购编号',
+    '招标单位', '采购单位', '需求单位', '截止时间', '招标类型', '采购方式', '联系人'
+  ];
+  const publishDateLabels = ['发布日期', '发布时间', '公告时间', '公告日期'];
   const headerSelectors = __HEADER_SELECTORS__;
   const body = document.body || document.documentElement;
   if (!body) return '';
@@ -2481,6 +2486,20 @@ async def extract_page_content(
     }
     return hits;
   }
+  function keyValueHits(text, labels) {
+    let hits = 0;
+    for (const label of labels) {
+      if (
+        text.includes(`${label}：`) ||
+        text.includes(`${label}:`) ||
+        text.includes(`${label} ：`) ||
+        text.includes(`${label} :`)
+      ) {
+        hits++;
+      }
+    }
+    return hits;
+  }
   function score(el) {
     if (!isVisible(el)) return -1e18;
     const t = textOf(el);
@@ -2506,7 +2525,7 @@ async def extract_page_content(
     const classId = classIdText(el);
     const buttons = count(el, 'button') + count(el, 'input') + count(el, 'select') + count(el, 'textarea') + count(el, '[role="button"]');
     const interactiveLinks = countMeaningfulLinks(el);
-    const metaHits = textSignals(t, ['项目编号', '发布时间', '公告时间', '项目名称']);
+    const metaHits = textSignals(t, metadataLabels);
     const classHits = textSignals(classId, ['title', 'header', 'project-info', 'notice-info', 'meta']);
     let bonus = classHits * 2200 + metaHits * 1800;
     if (/ccui-notice-app-container-detail-left/.test(classId)) bonus += 2500;
@@ -2518,6 +2537,34 @@ async def extract_page_content(
     if (len < 60 && buttons > 0) bonus -= 5000;
     if (len > 2000) bonus -= 1000;
     return bonus + len;
+  }
+  function metadataBlockScore(el) {
+    if (!isVisible(el)) return -1e18;
+    const rawText = textOf(el);
+    const t = rawText.replace(/\\s+/g, ' ').trim();
+    const len = t.length;
+    if (len < 20 || len > 2500) return -1e18;
+
+    const labelHits = textSignals(t, metadataLabels);
+    const publishHits = textSignals(t, publishDateLabels);
+    const kvHits = keyValueHits(t, metadataLabels);
+    if (labelHits < 2 && publishHits < 1) return -1e18;
+    if (kvHits < 1 && publishHits < 1) return -1e18;
+
+    const classId = classIdText(el);
+    const buttons = count(el, 'button') + count(el, 'input') + count(el, 'select') + count(el, 'textarea') + count(el, '[role="button"]');
+    const interactiveLinks = countMeaningfulLinks(el);
+    const lis = count(el, 'li');
+    const tables = count(el, 'table');
+
+    let s = publishHits * 5000 + labelHits * 900 + kvHits * 700 + tables * 120 + Math.min(len, 600);
+    if (/(detail|meta|info|title|header|project|notice)/.test(classId)) s += 1200;
+    if (/(nav|breadcrumb|menu|footer|sidebar|side-bar|right|timeout|btn|button|action|filter|search|pagination|pager|login|register|share)/.test(classId)) s -= 5000;
+    s -= buttons * 2500;
+    s -= interactiveLinks * 500;
+    if (lis > 20) s -= (lis - 20) * 80;
+    if (len > 1200) s -= (len - 1200) * 2;
+    return s;
   }
   function cloneForOutput(el) {
     const clone = el.cloneNode(true);
@@ -2584,6 +2631,14 @@ async def extract_page_content(
         bestHeaderScore = s;
         bestHeader = node;
       }
+    }
+  }
+  const metadataCandidates = body.querySelectorAll('div,section,article,main,table,dl,ul,li,p');
+  for (const node of metadataCandidates) {
+    const s = metadataBlockScore(node);
+    if (s >= 4800 && s > bestHeaderScore) {
+      bestHeaderScore = s;
+      bestHeader = node;
     }
   }
 

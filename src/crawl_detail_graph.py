@@ -381,6 +381,10 @@ def _merge_result_data(state: CrawlDetailGraphState) -> CrawlDetailGraphState:
 		"lotProducts": state.get("lot_products") or [],
 		"lotCandidates": state.get("lot_candidates") or [],
 	}
+	if not str(result_data.get("announcementDate") or "").strip():
+		list_page_date = normalize_date_ymd(state.get("date") or "")
+		if list_page_date:
+			result_data["announcementDate"] = list_page_date
 
 	return {"result_data": result_data}
 
