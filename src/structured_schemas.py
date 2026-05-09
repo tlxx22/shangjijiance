@@ -37,7 +37,7 @@ def _safe_json_schema_name(name: str) -> str:
 
 def build_extract_fields_model(fields: list, *, model_name: str) -> type[BaseModel]:
 	"""
-	Build a Pydantic model for LangChain `with_structured_output` from our YAML field config.
+	Build a Pydantic model for structured JSON extraction from our YAML field config.
 
 	Design goals:
 	- Keep "number" fields permissive (accept strings like "100万") and let normalize_field_value do conversion.

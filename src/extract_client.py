@@ -11,10 +11,10 @@ import trans
 DEFAULT_SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
 DEFAULT_SILICONFLOW_EXTRACT_MODEL = "Pro/deepseek-ai/DeepSeek-V3.2"
 
-DEFAULT_SANY_EXTRACT_MODEL = "deepseek-v3.2"
+DEFAULT_SANY_EXTRACT_MODEL = "deepseek-v4-flash"
 DEFAULT_SANY_MAX_TOKENS = 8192
 
-DEFAULT_OPENAI_EXTRACT_MODEL = "deepseek-v3-2-251201"
+DEFAULT_OPENAI_EXTRACT_MODEL = "deepseek-v4-flash"
 
 
 def _normalize_base_url(url: str) -> str:

@@ -12,7 +12,7 @@ from src.logger_config import get_logger
 
 
 DEFAULT_OPENAI_PARENT_ORG_MODEL = "gpt-5.2"
-DEFAULT_SANY_PARENT_ORG_MODEL = "deepseek-v3.2"
+DEFAULT_SANY_PARENT_ORG_MODEL = "deepseek-v4-flash"
 BOCHA_WEB_SEARCH_URL = "https://api.bochaai.com/v1/web-search"
 MAX_TOOL_ROUNDS = 10
 BOCHA_RESULT_COUNT = 8
