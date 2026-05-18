@@ -17,7 +17,6 @@ BOCHA_WEB_SEARCH_URL = "https://api.bochaai.com/v1/web-search"
 MAX_TOOL_ROUNDS = 10
 BOCHA_RESULT_COUNT = 8
 MAX_RESULT_TEXT_LEN = 600
-PARENT_ORG_SEARCH_QUERY_LIMIT = 3
 
 logger = get_logger()
 
@@ -341,28 +340,6 @@ def _tool_schema() -> list[dict[str, Any]]:
 	]
 
 
-def _build_parent_org_search_queries(org_name: str) -> list[str]:
-	base = (org_name or "").strip()
-	if not base:
-		return []
-
-	candidates = [
-		f"{base} 上级单位",
-		f"{base} 母公司",
-		f"{base} 控股股东",
-	]
-	queries: list[str] = []
-	seen: set[str] = set()
-	for query in candidates:
-		cleaned = " ".join(str(query).split())
-		if cleaned and cleaned not in seen:
-			seen.add(cleaned)
-			queries.append(cleaned)
-		if len(queries) >= PARENT_ORG_SEARCH_QUERY_LIMIT:
-			break
-	return queries
-
-
 def resolve_affiliate_org_name(org_name: str) -> str:
 	original_org_name = (org_name or "").strip()
 	if not original_org_name:
@@ -427,7 +404,7 @@ def resolve_affiliate_org_name(org_name: str) -> str:
 		return original_org_name
 
 
-def _resolve_parent_org_name_tool_loop(org_name: str) -> dict[str, Any]:
+def resolve_parent_org_name(org_name: str) -> dict[str, Any]:
 	route, client, model_name = _get_client_config()
 
 	messages: list[dict[str, Any]] = [
@@ -531,133 +508,7 @@ def _resolve_parent_org_name_tool_loop(org_name: str) -> dict[str, Any]:
 			"model": model_name,
 		}
 
-	if tool_used:
-		messages.append(
-			{
-				"role": "user",
-				"content": (
-					f"You have reached the maximum search rounds ({MAX_TOOL_ROUNDS}). "
-					"Do NOT call any tool again. Based only on the existing tool results in this conversation, "
-					"return the final JSON object now. If the evidence is insufficient, set parentOrgName to "
-					'an empty string "" and use a low confidence. sourceUrls must only use URLs already returned by tools.'
-				),
-			}
-		)
-		response = client.chat.completions.create(
-			model=model_name,
-			messages=messages,
-			tools=_tool_schema(),
-			tool_choice="none",
-		)
-		choices = _get_value(response, "choices", None) or []
-		if not choices:
-			raise ParentOrgUpstreamError("parent_org_name final upstream returned no choices")
-
-		message = _get_value(choices[0], "message", None)
-		if message is None:
-			raise ParentOrgUpstreamError("parent_org_name final upstream returned no message")
-
-		payload = _parse_json_object(_extract_message_content(message))
-		parent_org_name, confidence, sources = _validate_payload(payload, source_index)
-		logger.info(
-			f"parent_org_name final-after-max-rounds orgName={org_name!r} route={route} model={model_name} "
-			f"confidence={confidence} sources={len(sources)}"
-		)
-		return {
-			"parentOrgName": parent_org_name,
-			"confidence": confidence,
-			"sources": sources,
-			"route": route,
-			"model": model_name,
-		}
-
 	raise ParentOrgUpstreamError(f"parent_org_name exceeded max tool rounds ({MAX_TOOL_ROUNDS})")
-
-
-def resolve_parent_org_name(org_name: str) -> dict[str, Any]:
-	route, client, model_name = _get_client_config()
-	query_org_name = (org_name or "").strip()
-	source_index: dict[str, dict[str, str]] = {}
-	search_payloads: list[dict[str, Any]] = []
-
-	for query in _build_parent_org_search_queries(query_org_name):
-		results = _run_bocha_web_search(query)
-		for item in results:
-			source_index.setdefault(item["url"], {"title": item["title"], "url": item["url"]})
-		search_payloads.append(
-			{
-				"query": query,
-				"results": _bocha_tool_payload(results)["results"],
-			}
-		)
-
-	messages: list[dict[str, Any]] = [
-		{
-			"role": "system",
-			"content": (
-				"You resolve the nearest parent organization for a company or organization name.\n\n"
-				"The backend has already searched the web for you. Do not call tools.\n"
-				"The goal is the nearest upper-level organization, not the ultimate group and not the ultimate controller.\n\n"
-				"Return ONLY one JSON object with exactly these fields:\n"
-				"{\n"
-				'  "parentOrgName": "string",\n'
-				'  "confidence": 0.0,\n'
-				'  "sourceUrls": ["https://..."]\n'
-				"}\n\n"
-				"Rules:\n"
-				'- Use confidence to reflect uncertainty; do not use empty string only because confidence is low.\n'
-				'- If the answer would otherwise be a placeholder such as "none", "unknown", "N/A", or similar text, set "parentOrgName" to "" instead.\n'
-				'- "parentOrgName" must be an organization or company name, not a person name, not a contact, and not a job title or role such as chairman, legal representative, or general manager; if you would otherwise return a person name or role title, set "parentOrgName" to "" instead.\n'
-				'- Prefer the full official or legal organization name instead of an abbreviation, alias, or historical short name whenever the sources support the full name.\n'
-				'- If the sources show both a short name and a full name for the same organization, return the full name.\n'
-				"- sourceUrls must contain only real URLs from the provided search results.\n"
-				'- If the provided evidence is insufficient, return parentOrgName as "" with a low confidence.\n'
-				"- Always return the single most suitable result.\n"
-				"- Do not return Markdown, explanations, or extra fields.\n"
-			),
-		},
-		{
-			"role": "user",
-			"content": (
-				"请基于后端已经提供的联网搜索结果，判断这个公司/组织名称对应的“最接近上级”组织。\n"
-				"要求：\n"
-				"1. 置信度用于体现不确定性，不要因为置信度低就直接把 parentOrgName 置空。\n"
-				"2. 但如果你本来会填“无”“未知”“暂无”等占位内容，必须改成空字符串 \"\"。\n"
-				"3. parentOrgName 必须是公司或组织名称，不要填写董事长、法定代表人、总经理、联系人等人名或职务；如果只能得到这类内容，也必须返回空字符串 \"\"。\n"
-				"4. 如果来源里同时出现简称和全称，优先返回全称，不要返回简称。\n"
-				f"输入名称：{query_org_name}\n\n"
-				"后端搜索结果(JSON)：\n"
-				f"{json.dumps(search_payloads, ensure_ascii=False)}"
-			),
-		},
-	]
-
-	response = client.chat.completions.create(
-		model=model_name,
-		messages=messages,
-		response_format={"type": "json_object"},
-	)
-	choices = _get_value(response, "choices", None) or []
-	if not choices:
-		raise ParentOrgUpstreamError("parent_org_name upstream returned no choices")
-
-	message = _get_value(choices[0], "message", None)
-	if message is None:
-		raise ParentOrgUpstreamError("parent_org_name upstream returned no message")
-
-	payload = _parse_json_object(_extract_message_content(message))
-	parent_org_name, confidence, sources = _validate_payload(payload, source_index)
-	logger.info(
-		f"parent_org_name final orgName={query_org_name!r} route={route} model={model_name} "
-		f"queries={len(search_payloads)} sources={len(source_index)} confidence={confidence}"
-	)
-	return {
-		"parentOrgName": parent_org_name,
-		"confidence": confidence,
-		"sources": sources,
-		"route": route,
-		"model": model_name,
-	}
 
 
 def resolve_parent_org_with_affiliate(org_name: str) -> dict[str, Any]:
