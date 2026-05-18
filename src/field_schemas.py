@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Optional
 
@@ -336,6 +337,25 @@ def normalize_date_ymd(v: Any) -> str:
 	if not (1 <= month <= 12 and 1 <= day <= 31):
 		return s
 	return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def normalize_bid_open_date(v: Any) -> str | None:
+	"""
+	Only accept bidOpenDate when it is already in strict YYYY-MM-DD form.
+	"""
+	if v is None:
+		return None
+	s = str(v).strip()
+	if not s or s.lower() in _EMPTY_STRINGS:
+		return None
+	if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+		return None
+
+	try:
+		datetime.strptime(s, "%Y-%m-%d")
+	except ValueError:
+		return None
+	return s
 
 
 def _join_list(v: Any) -> str:

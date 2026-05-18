@@ -14,6 +14,15 @@ def _has_non_empty_value(value: Any) -> bool:
     return str(value).strip() != ""
 
 
+def _has_non_zero_amount_value(value: Any) -> bool:
+    if not _has_non_empty_value(value):
+        return False
+    try:
+        return float(str(value).strip()) != 0
+    except ValueError:
+        return True
+
+
 def _is_empty_quantity_for_estimation(value: Any) -> bool:
     if value is None:
         return True
@@ -50,7 +59,7 @@ def _pick_candidate_amount(lot_candidates: Any) -> Any:
             if not isinstance(candidate, dict):
                 continue
             price = candidate.get("candidatePrices")
-            if not _has_non_empty_value(price):
+            if not _has_non_zero_amount_value(price):
                 continue
             if str(candidate.get("type") or "").strip() == preferred_type:
                 return price
@@ -59,7 +68,7 @@ def _pick_candidate_amount(lot_candidates: Any) -> Any:
         if not isinstance(candidate, dict):
             continue
         price = candidate.get("candidatePrices")
-        if _has_non_empty_value(price):
+        if _has_non_zero_amount_value(price):
             return price
 
     return None
@@ -67,14 +76,14 @@ def _pick_candidate_amount(lot_candidates: Any) -> Any:
 
 def pick_estimated_amount_priority_clue(item: MutableMapping[str, Any]) -> Any:
     winner_amount = item.get("winnerAmount")
-    if _has_non_empty_value(winner_amount):
+    if _has_non_zero_amount_value(winner_amount):
         return winner_amount
     return _pick_candidate_amount(item.get("lotCandidates") or [])
 
 
 def pick_estimated_amount_budget_clue(item: MutableMapping[str, Any]) -> Any:
     budget_amount = item.get("budgetAmount")
-    if _has_non_empty_value(budget_amount):
+    if _has_non_zero_amount_value(budget_amount):
         return budget_amount
     return None
 

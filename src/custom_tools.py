@@ -579,6 +579,7 @@ from .field_schemas import (
 	supplement_lot_products_from_candidates,
 	try_normalize_announcement_type,
 	_to_yuan,
+	normalize_bid_open_date,
 	normalize_date_ymd,
 )
 from .estimated_amount_deriver import fill_estimated_amount_after_lots
@@ -1949,8 +1950,10 @@ def normalize_field_value(key: str, value: Any, field_type: str):
 
 	# string
 	text = "" if value is None else str(value).strip()
-	if key in {"announcementDate", "bidOpenDate"}:
+	if key == "announcementDate":
 		return normalize_date_ymd(text)
+	if key == "bidOpenDate":
+		return normalize_bid_open_date(text)
 	return text
 
 
