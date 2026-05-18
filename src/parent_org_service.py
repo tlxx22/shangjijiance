@@ -508,6 +508,46 @@ def resolve_parent_org_name(org_name: str) -> dict[str, Any]:
 			"model": model_name,
 		}
 
+	if tool_used:
+		messages.append(
+			{
+				"role": "user",
+				"content": (
+					f"You have reached the maximum search rounds ({MAX_TOOL_ROUNDS}). "
+					"Do NOT call any tool again. Based only on the existing tool results in this conversation, "
+					"return the final JSON object now. If the evidence is insufficient, set parentOrgName to "
+					'an empty string "" and use a low confidence. sourceUrls must only use URLs already returned by tools.'
+				),
+			}
+		)
+		response = client.chat.completions.create(
+			model=model_name,
+			messages=messages,
+			tools=_tool_schema(),
+			tool_choice="none",
+		)
+		choices = _get_value(response, "choices", None) or []
+		if not choices:
+			raise ParentOrgUpstreamError("parent_org_name final upstream returned no choices")
+
+		message = _get_value(choices[0], "message", None)
+		if message is None:
+			raise ParentOrgUpstreamError("parent_org_name final upstream returned no message")
+
+		payload = _parse_json_object(_extract_message_content(message))
+		parent_org_name, confidence, sources = _validate_payload(payload, source_index)
+		logger.info(
+			f"parent_org_name final-after-max-rounds orgName={org_name!r} route={route} model={model_name} "
+			f"confidence={confidence} sources={len(sources)}"
+		)
+		return {
+			"parentOrgName": parent_org_name,
+			"confidence": confidence,
+			"sources": sources,
+			"route": route,
+			"model": model_name,
+		}
+
 	raise ParentOrgUpstreamError(f"parent_org_name exceeded max tool rounds ({MAX_TOOL_ROUNDS})")
 
 
