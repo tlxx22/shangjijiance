@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from openai import OpenAI
@@ -34,6 +35,43 @@ def _get_sany_headers() -> dict[str, str] | None:
 	if not x_ai_server:
 		return None
 	return {"X-ai-server": x_ai_server}
+
+
+def _is_deepseek_official_base_url(base_url: str) -> bool:
+	host = (urlparse(base_url).hostname or "").strip().lower()
+	return host in {"api.deepseek.com", "api.deepseek.cn"} or host.endswith(".deepseek.com") or host.endswith(".deepseek.cn")
+
+
+def _is_dashscope_base_url(base_url: str) -> bool:
+	host = (urlparse(base_url).hostname or "").strip().lower()
+	return host == "dashscope.aliyuncs.com" or host.endswith(".dashscope.aliyuncs.com")
+
+
+def _parent_org_thinking_extra_body() -> dict[str, Any]:
+	route = getattr(trans, "ROUTE", "official")
+	if route == "openai":
+		base_url = _normalize_base_url(os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"))
+		if _is_deepseek_official_base_url(base_url):
+			return {"thinking": {"type": "disabled"}}
+		if _is_dashscope_base_url(base_url):
+			return {"enable_thinking": False}
+	if route == "sany":
+		x_ai_server = (os.getenv("SANY_X_AI_SERVER") or os.getenv("SANY_AI_SERVER") or "").strip().upper()
+		if x_ai_server == "ALI-BAILIAN":
+			return {"enable_thinking": False}
+	return {}
+
+
+def _parent_org_chat_kwargs(**kwargs: Any) -> dict[str, Any]:
+	"""
+	Disable thinking for parent_org_name calls so tool-call messages do not require
+	provider-specific reasoning_content replay across turns.
+	"""
+	extra_body = dict(kwargs.pop("extra_body", {}) or {})
+	extra_body.update({k: v for k, v in _parent_org_thinking_extra_body().items() if k not in extra_body})
+	if extra_body:
+		return {**kwargs, "extra_body": extra_body}
+	return kwargs
 
 
 def _get_value(obj: Any, key: str, default: Any = None) -> Any:
@@ -348,8 +386,9 @@ def resolve_affiliate_org_name(org_name: str) -> str:
 	try:
 		route, client, model_name = _get_client_config()
 		response = client.chat.completions.create(
-			model=model_name,
-			messages=[
+			**_parent_org_chat_kwargs(
+				model=model_name,
+				messages=[
 				{
 					"role": "system",
 					"content": (
@@ -380,7 +419,8 @@ def resolve_affiliate_org_name(org_name: str) -> str:
 						f"原始输入：{original_org_name}"
 					),
 				},
-			],
+				],
+			)
 		)
 		choices = _get_value(response, "choices", None) or []
 		if not choices:
@@ -450,10 +490,12 @@ def resolve_parent_org_name(org_name: str) -> dict[str, Any]:
 
 	for round_index in range(MAX_TOOL_ROUNDS):
 		response = client.chat.completions.create(
-			model=model_name,
-			messages=messages,
-			tools=_tool_schema(),
-			tool_choice="auto",
+			**_parent_org_chat_kwargs(
+				model=model_name,
+				messages=messages,
+				tools=_tool_schema(),
+				tool_choice="auto",
+			)
 		)
 		choices = _get_value(response, "choices", None) or []
 		if not choices:
@@ -521,10 +563,12 @@ def resolve_parent_org_name(org_name: str) -> dict[str, Any]:
 			}
 		)
 		response = client.chat.completions.create(
-			model=model_name,
-			messages=messages,
-			tools=_tool_schema(),
-			tool_choice="none",
+			**_parent_org_chat_kwargs(
+				model=model_name,
+				messages=messages,
+				tools=_tool_schema(),
+				tool_choice="none",
+			)
 		)
 		choices = _get_value(response, "choices", None) or []
 		if not choices:
